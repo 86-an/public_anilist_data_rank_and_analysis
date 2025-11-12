@@ -1,0 +1,2 @@
+# public_anilist_data_rank_and_analysis
+アニリストの順位とデータ分析
