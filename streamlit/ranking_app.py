@@ -15,39 +15,48 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# ==================== 共通ユーティリティ関数 ====================
+
+def get_db_path(db_name):
+    """データベースパスを取得（絶対パス→相対パスの順で試行）"""
+    # 絶対パス
+    db_path = Path(rf'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\{db_name}')
+    
+    # 相対パス（バックアップ）
+    if not db_path.exists():
+        current_file = Path(__file__).resolve()
+        project_root = current_file.parent.parent
+        db_path = project_root / 'db' / db_name
+    
+    return db_path
+
 @st.cache_data
-def load_anime_data():
-    """アニメデータの読み込み"""
+def load_data_from_db(db_name, query, success_message):
+    """データベースからデータを読み込む汎用関数
+    
+    Args:
+        db_name: データベースファイル名（例: 'anime_data.db'）
+        query: SQL クエリ文字列
+        success_message: 成功時のメッセージ
+    
+    Returns:
+        pd.DataFrame または None
+    """
     try:
-        # 絶対パスでデータベースの場所を指定
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-        
-        # バックアップ: 相対パスでも試行
-        if not db_path.exists():
-            current_file = Path(__file__).resolve()
-            project_root = current_file.parent.parent
-            db_path = project_root / 'db' / 'anime_data.db'
+        db_path = get_db_path(db_name)
         
         if not db_path.exists():
-            st.error(f"❌ anime_data.db が見つかりません")
+            st.error(f"❌ {db_name} が見つかりません")
             st.error(f"確認した場所: {db_path}")
             return None
         
         st.info(f"📂 データベース接続: {db_path}")
         
         conn = sqlite3.connect(str(db_path))
-        query = """
-            SELECT 
-                a.anilist_id, a.title_romaji, a.title_native, a.format, 
-                a.season, a.seasonYear, a.favorites, a.meanScore, 
-                a.popularity, a.source
-            FROM anime a
-            WHERE a.title_romaji IS NOT NULL
-            ORDER BY a.meanScore DESC NULLS LAST
-        """
         data = pd.read_sql_query(query, conn)
         conn.close()
-        st.success(f"✅ アニメデータ読み込み成功: {len(data):,}件")
+        
+        st.success(f"✅ {success_message}: {len(data):,}件")
         return data
         
     except sqlite3.Error as e:
@@ -56,174 +65,377 @@ def load_anime_data():
     except Exception as e:
         st.error(f"❌ 予期しないエラー: {e}")
         return None
+
+def apply_numeric_conversion(display_data, numeric_columns):
+    """指定された列を数値型に変換
+    
+    Args:
+        display_data: データフレーム
+        numeric_columns: 数値変換する列名のリスト
+    
+    Returns:
+        変換後のデータフレーム
+    """
+    for col in numeric_columns:
+        if col in display_data.columns:
+            display_data[col] = pd.to_numeric(display_data[col], errors='coerce')
+    return display_data
+
+def calculate_basic_statistics(data, metric_col):
+    """基礎統計を計算する汎用関数
+    
+    Args:
+        data: データフレーム
+        metric_col: 統計を計算する列名
+    
+    Returns:
+        統計情報の辞書 または None
+    """
+    if metric_col not in data.columns:
+        return None
+    
+    metric_data = data[metric_col].dropna()
+    
+    if len(metric_data) == 0:
+        return None
+    
+    stats = {
+        "合計": float(metric_data.sum()),
+        "カウント": len(metric_data),
+        "最大": float(metric_data.max()),
+        "最小": float(metric_data.min()),
+        "平均": float(metric_data.mean()),
+        "中央値": float(metric_data.median()),
+        "1/4分位": float(metric_data.quantile(0.25)),
+        "3/4分位": float(metric_data.quantile(0.75))
+    }
+    
+    if len(metric_data) > 1:
+        stats["標準偏差"] = float(metric_data.std())
+        stats["分散"] = float(metric_data.var())
+    
+    return stats
+
+def create_filter_ui(data, key_prefix, db_type='anime', show_metric=False, custom_columns=None):
+    """フィルターUIを生成する汎用関数
+    
+    Args:
+        data: データフレーム
+        key_prefix: Streamlitウィジェットのキープレフィックス
+        db_type: 'anime' or 'manga'
+        show_metric: 指標選択を表示するか
+        custom_columns: カスタム列設定のリスト（例: [('column_name', 'ラベル名')]）
+    
+    Returns:
+        filters: フィルター辞書
+        selected_metric: 選択された指標（show_metric=Trueの場合のみ）
+    """
+    st.subheader("🔧 フィルター設定")
+    
+    filters = {}
+    selected_metric = None
+    
+    # 基本フィルター（3列）
+    if show_metric:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            metric_options = ["meanScore", "favorites", "popularity"]
+            metric_labels = {
+                "meanScore": "平均スコア",
+                "favorites": "お気に入り数", 
+                "popularity": "人気度"
+            }
+            selected_metric = st.selectbox(
+                "指標",
+                metric_options,
+                format_func=lambda x: metric_labels.get(x, x),
+                key=f"{key_prefix}_metric"
+            )
+        start_col = col2
+    else:
+        col1, col2, col3 = st.columns(3)
+        start_col = col1
+    
+    # 年度選択
+    with start_col:
+        if 'seasonYear' in data.columns:
+            years = ["全て"] + [str(int(year)) for year in get_unique_values(data, 'seasonYear')]
+            selected_year = st.selectbox("年度", years, key=f"{key_prefix}_year")
+            if selected_year != "全て":
+                try:
+                    filters['seasonYear'] = float(selected_year)
+                except ValueError:
+                    pass
+    
+    # 季節選択
+    next_col = col3 if show_metric else col2
+    with next_col:
+        if 'season' in data.columns:
+            seasons = ["全て"] + get_unique_values(data, 'season')
+            selected_season = st.selectbox("季節", seasons, key=f"{key_prefix}_season")
+            if selected_season != "全て":
+                filters['season'] = selected_season
+    
+    # フォーマット選択
+    third_col = col3 if not show_metric else None
+    if third_col:
+        with third_col:
+            if 'format' in data.columns:
+                formats = ["全て"] + get_unique_values(data, 'format')
+                selected_format = st.selectbox("フォーマット", formats, key=f"{key_prefix}_format")
+                if selected_format != "全て":
+                    filters['format'] = selected_format
+    
+    # 追加フィルター
+    additional_filters = []
+    if not third_col and 'format' in data.columns:
+        additional_filters.append(('format', 'フォーマット'))
+    if 'source' in data.columns:
+        additional_filters.append(('source', '原作'))
+    
+    # ジャンルフィルターを追加
+    db_name = 'anime_data.db' if db_type == 'anime' else 'manga_data.db'
+    db_path = get_db_path(db_name)
+    if db_path.exists():
+        additional_filters.append(('genre', 'ジャンル'))
+    
+    # カスタム列を追加
+    if custom_columns:
+        # custom_columnsがタプルのリストでない場合は変換
+        for col in custom_columns:
+            if isinstance(col, tuple):
+                additional_filters.append(col)
+            else:
+                # カラム名から日本語ラベルを推測
+                label_map = {
+                    'seasonYear': '年度',
+                    'season': '季節',
+                    'format': 'フォーマット',
+                    'source': '原作',
+                    'genre': 'ジャンル',
+                    'genre_name': 'ジャンル'
+                }
+                label = label_map.get(col, col)
+                additional_filters.append((col, label))
+    
+    # 追加フィルターの表示
+    if additional_filters:
+        num_cols = min(3, len(additional_filters))
+        cols = st.columns(num_cols)
+        
+        for idx, (col_name, label) in enumerate(additional_filters):
+            with cols[idx % num_cols]:
+                if col_name == 'genre':
+                    # ジャンル選択（データベースから取得）
+                    available_genres = get_genres_data(db_path)
+                    genres_options = ["全て"] + available_genres
+                    selected_genre = st.selectbox(label, genres_options, key=f"{key_prefix}_genre")
+                    if selected_genre != "全て":
+                        filters['genre'] = selected_genre
+                elif col_name in data.columns:
+                    options = ["全て"] + get_unique_values(data, col_name)
+                    selected = st.selectbox(label, options, key=f"{key_prefix}_{col_name}")
+                    if selected != "全て":
+                        filters[col_name] = selected
+    
+    if show_metric:
+        return filters, selected_metric
+    return filters
+
+def apply_filters_to_data(data, filters, db_type='anime'):
+    """フィルターをデータに適用する汎用関数
+    
+    Args:
+        data: データフレーム
+        filters: フィルター辞書
+        db_type: 'anime' or 'manga'
+    
+    Returns:
+        フィルター適用後のデータフレーム
+    """
+    db_name = 'anime_data.db' if db_type == 'anime' else 'manga_data.db'
+    db_path = get_db_path(db_name)
+    return filter_data(data, filters, db_path if db_path.exists() else None)
+
+def show_ranking_template(data, config):
+    """ランキング表示の汎用テンプレート
+    
+    Args:
+        data: データフレーム
+        config: 設定辞書 {
+            'title': ヘッダータイトル,
+            'key_prefix': フィルターキープレフィックス,
+            'db_type': 'anime' or 'manga',
+            'dedup_config': {'id_col': ID列, 'sort_col': ソート列, 'sort_by': ソート基準列} or None,
+            'sort_by': ソート列名,
+            'display_columns': 表示列リスト,
+            'column_mapping': 列名マッピング辞書,
+            'chart_config': {'x': X軸列, 'y': Y軸列, 'title': タイトル, 'labels': ラベル辞書, 'hover_data': ホバーデータリスト}
+        }
+    """
+    st.header(config['title'])
+    
+    if data is None or data.empty:
+        st.warning("データが利用できません。")
+        return
+    
+    # フィルター設定
+    filters = create_filter_ui(data, config['key_prefix'], db_type=config['db_type'])
+    filtered_data = apply_filters_to_data(data, filters, config['db_type'])
+    
+    if filtered_data.empty:
+        st.warning("選択された条件に一致するデータがありません。")
+        return
+    
+    # 重複削除処理
+    if config.get('dedup_config'):
+        dedup = config['dedup_config']
+        if 'role_aggregate' in dedup and dedup['role_aggregate']:
+            # スタッフの役割集約
+            filtered_data['roles'] = filtered_data.groupby([dedup['id_col'], dedup['sort_col']])['role'].transform(
+                lambda x: ', '.join(sorted(set(x.dropna())))
+            )
+            filtered_data = filtered_data.drop_duplicates(subset=[dedup['id_col'], dedup['sort_col']], keep='first')
+        
+        filtered_data = filtered_data.sort_values(
+            [dedup['id_col'], dedup['sort_by']], 
+            ascending=[True, False]
+        ).groupby(dedup['id_col']).first().reset_index()
+    
+    # フィルター適用後のデータ件数
+    filtered_count = len(filtered_data)
+    
+    # ランキング表示
+    st.subheader(f"📋 ランキング結果 ({filtered_count:,}件）")
+    
+    # ソート
+    sorted_data = filtered_data.sort_values(config['sort_by'], ascending=False).reset_index(drop=True)
+    
+    # 表示用データフレーム準備
+    available_columns = [col for col in config['display_columns'] if col in sorted_data.columns]
+    display_data = sorted_data[available_columns].copy()
+    
+    # 数値型変換
+    numeric_columns = [col for col in available_columns if col not in ['title_native', 'chara_name', 'voiceactor_name', 'staff_name', 'studios_name', 'roles', 'season', 'source', 'format', 'genre_name']]
+    display_data = apply_numeric_conversion(display_data, numeric_columns)
+    
+    # カラム名変更
+    display_data = display_data.rename(columns=config['column_mapping'])
+    
+    # インデックスを順位に設定
+    display_data.index = range(1, len(display_data) + 1)
+    display_data.index.name = "順位"
+    
+    # 表示
+    st.dataframe(display_data, width='stretch', height=400)
+    
+    # トップ10チャート
+    if len(sorted_data) >= 1 and config.get('chart_config'):
+        st.subheader("📊 トップ10チャート")
+        top10_data = sorted_data.head(10)
+        
+        if not top10_data.empty:
+            chart = config['chart_config']
+            fig = px.bar(
+                top10_data,
+                x=chart['x'],
+                y=chart['y'],
+                title=chart['title'],
+                labels=chart['labels'],
+                hover_data=chart.get('hover_data', [])
+            )
+            fig.update_xaxes(tickangle=45)
+            fig.update_layout(height=500)
+            st.plotly_chart(fig, width='stretch')
+
+# ==================== データロード関数（既存） ====================
+
+@st.cache_data
+def load_anime_data():
+    """アニメデータの読み込み"""
+    query = """
+        SELECT 
+            a.anilist_id, a.title_romaji, a.title_native, a.format, 
+            a.season, a.seasonYear, a.favorites, a.meanScore, 
+            a.popularity, a.source
+        FROM anime a
+        WHERE a.title_romaji IS NOT NULL
+        ORDER BY a.meanScore DESC NULLS LAST
+    """
+    return load_data_from_db('anime_data.db', query, 'アニメデータ読み込み成功')
 
 @st.cache_data
 def get_genres_data(db_path):
     """データベースからジャンルデータを取得"""
     try:
         conn = sqlite3.connect(str(db_path))
-        query = "SELECT DISTINCT genre_name FROM genres ORDER BY genre_name"
         cursor = conn.cursor()
-        cursor.execute(query)
+        cursor.execute("SELECT DISTINCT genre_name FROM genres ORDER BY genre_name")
         genres = [row[0] for row in cursor.fetchall()]
         conn.close()
         return genres
-    except sqlite3.Error as e:
-        st.error(f"❌ ジャンルデータ取得エラー: {e}")
-        return []
     except Exception as e:
-        st.error(f"❌ 予期しないエラー: {e}")
+        st.error(f"❌ ジャンルデータ取得エラー: {e}")
         return []
 
 @st.cache_data
 def load_character_data():
     """キャラクターデータの読み込み"""
-    try:
-        # 絶対パスでデータベースの場所を指定
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-        
-        # バックアップ: 相対パスでも試行
-        if not db_path.exists():
-            current_file = Path(__file__).resolve()
-            project_root = current_file.parent.parent
-            db_path = project_root / 'db' / 'anime_data.db'
-        
-        if not db_path.exists():
-            st.error(f"❌ anime_data.db が見つかりません")
-            st.error(f"確認した場所: {db_path}")
-            return None
-        
-        st.info(f"📂 データベース接続: {db_path}")
-        
-        conn = sqlite3.connect(str(db_path))
-        query = """
-            SELECT 
-                c.chara_id, c.chara_name, c.favorites as char_favorites,
-                a.anilist_id, a.title_romaji, a.title_native, 
-                a.season, a.seasonYear, a.favorites as anime_favorites, 
-                a.popularity as anime_popularity,
-                a.meanScore, a.format, a.source
-            FROM characters c
-            JOIN anime a ON c.anilist_id = a.anilist_id
-            WHERE c.chara_name IS NOT NULL
-            ORDER BY c.favorites DESC NULLS LAST
-        """
-        data = pd.read_sql_query(query, conn)
-        conn.close()
-        st.success(f"✅ キャラクターデータ読み込み成功: {len(data):,}件")
-        return data
-        
-    except sqlite3.Error as e:
-        st.error(f"❌ データベースエラー: {e}")
-        return None
-    except Exception as e:
-        st.error(f"❌ 予期しないエラー: {e}")
-        return None
+    query = """
+        SELECT 
+            c.chara_id, c.chara_name, c.favorites as char_favorites,
+            a.anilist_id, a.title_romaji, a.title_native, 
+            a.season, a.seasonYear, a.favorites as anime_favorites, 
+            a.popularity as anime_popularity,
+            a.meanScore, a.format, a.source
+        FROM characters c
+        JOIN anime a ON c.anilist_id = a.anilist_id
+        WHERE c.chara_name IS NOT NULL
+        ORDER BY c.favorites DESC NULLS LAST
+    """
+    return load_data_from_db('anime_data.db', query, 'キャラクターデータ読み込み成功')
 
 @st.cache_data
 def load_voiceactor_data():
     """声優データの読み込み"""
-    try:
-        # 絶対パスでデータベースの場所を指定
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-        
-        # バックアップ: 相対パスでも試行
-        if not db_path.exists():
-            current_file = Path(__file__).resolve()
-            project_root = current_file.parent.parent
-            db_path = project_root / 'db' / 'anime_data.db'
-        
-        if not db_path.exists():
-            st.error(f"❌ anime_data.db が見つかりません")
-            st.error(f"確認した場所: {db_path}")
-            return None
-        
-        st.info(f"📂 データベース接続: {db_path}")
-        
-        conn = sqlite3.connect(str(db_path))
-        query = """
-            SELECT 
-                v.voiceactor_id, v.voiceactor_name, v.favorites as va_favorites,
-                a.anilist_id, a.title_romaji, a.title_native, 
-                a.season, a.seasonYear, a.favorites as anime_favorites, 
-                a.meanScore, a.format, a.source,
-                vb.voiceactor_count, vb.count_per_year
-            FROM voiceactors v
-            JOIN anime a ON v.anilist_id = a.anilist_id
-            LEFT JOIN voiceactor_basic vb ON v.voiceactor_id = vb.voiceactor_id
-            WHERE v.voiceactor_name IS NOT NULL
-            ORDER BY v.favorites DESC NULLS LAST
-        """
-        data = pd.read_sql_query(query, conn)
-        conn.close()
-        st.success(f"✅ 声優データ読み込み成功: {len(data):,}件")
-        return data
-        
-    except sqlite3.Error as e:
-        st.error(f"❌ データベースエラー: {e}")
-        return None
-    except Exception as e:
-        st.error(f"❌ 予期しないエラー: {e}")
-        return None
+    query = """
+        SELECT 
+            v.voiceactor_id, v.voiceactor_name, v.favorites as va_favorites,
+            a.anilist_id, a.title_romaji, a.title_native, 
+            a.season, a.seasonYear, a.favorites as anime_favorites, 
+            a.meanScore, a.format, a.source,
+            vb.voiceactor_count, vb.count_per_year
+        FROM voiceactors v
+        JOIN anime a ON v.anilist_id = a.anilist_id
+        LEFT JOIN voiceactor_basic vb ON v.voiceactor_id = vb.voiceactor_id
+        WHERE v.voiceactor_name IS NOT NULL
+        ORDER BY v.favorites DESC NULLS LAST
+    """
+    return load_data_from_db('anime_data.db', query, '声優データ読み込み成功')
 
 @st.cache_data
 def load_staff_data():
     """スタッフデータの読み込み"""
-    try:
-        # 絶対パスでデータベースの場所を指定
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-        
-        # バックアップ: 相対パスでも試行
-        if not db_path.exists():
-            current_file = Path(__file__).resolve()
-            project_root = current_file.parent.parent
-            db_path = project_root / 'db' / 'anime_data.db'
-        
-        if not db_path.exists():
-            st.error(f"❌ anime_data.db が見つかりません")
-            st.error(f"確認した場所: {db_path}")
-            return None
-        
-        st.info(f"📂 データベース接続: {db_path}")
-        
-        conn = sqlite3.connect(str(db_path))
-        query = """
-            SELECT 
-                s.staff_id, s.staff_name, s.role, s.favorites as staff_favorites,
-                a.anilist_id, a.title_romaji, a.title_native, 
-                a.season, a.seasonYear, a.favorites as anime_favorites, 
-                a.meanScore, a.format, a.source,
-                sb.staff_count, sb.count_per_year
-            FROM staff s
-            JOIN anime a ON s.anilist_id = a.anilist_id
-            LEFT JOIN staff_basic sb ON s.staff_id = sb.staff_id
-            WHERE s.staff_name IS NOT NULL
-            ORDER BY s.favorites DESC NULLS LAST
-        """
-        data = pd.read_sql_query(query, conn)
-        conn.close()
-        st.success(f"✅ スタッフデータ読み込み成功: {len(data):,}件")
-        return data
-        
-    except sqlite3.Error as e:
-        st.error(f"❌ データベースエラー: {e}")
-        return None
-    except Exception as e:
-        st.error(f"❌ 予期しないエラー: {e}")
-        return None
+    query = """
+        SELECT 
+            s.staff_id, s.staff_name, s.role, s.favorites as staff_favorites,
+            a.anilist_id, a.title_romaji, a.title_native, 
+            a.season, a.seasonYear, a.favorites as anime_favorites, 
+            a.meanScore, a.format, a.source,
+            sb.staff_count, sb.count_per_year
+        FROM staff s
+        JOIN anime a ON s.anilist_id = a.anilist_id
+        LEFT JOIN staff_basic sb ON s.staff_id = sb.staff_id
+        WHERE s.staff_name IS NOT NULL
+        ORDER BY s.favorites DESC NULLS LAST
+    """
+    return load_data_from_db('anime_data.db', query, 'スタッフデータ読み込み成功')
 
 @st.cache_data
 def load_studios_data():
-    """スタジオデータの読み込み"""
+    """スタジオデータの読み込み（統計データ付き）"""
     try:
-        # 絶対パスでデータベースの場所を指定
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-        
-        # バックアップ: 相対パスでも試行
-        if not db_path.exists():
-            current_file = Path(__file__).resolve()
-            project_root = current_file.parent.parent
-            db_path = project_root / 'db' / 'anime_data.db'
+        db_path = get_db_path('anime_data.db')
         
         if not db_path.exists():
             st.error(f"❌ anime_data.db が見つかりません")
@@ -279,276 +491,175 @@ def load_studios_data():
         st.success(f"✅ スタジオデータ読み込み成功: {len(data):,}件")
         return data
         
-    except sqlite3.Error as e:
-        st.error(f"❌ データベースエラー: {e}")
-        return None
     except Exception as e:
-        st.error(f"❌ 予期しないエラー: {e}")
+        st.error(f"❌ エラー: {e}")
         return None
 
 @st.cache_data
 def load_source_data():
-    """原作データの読み込み"""
-    try:
-        # 絶対パスでデータベースの場所を指定
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-        
-        # バックアップ: 相対パスでも試行
-        if not db_path.exists():
-            current_file = Path(__file__).resolve()
-            project_root = current_file.parent.parent
-            db_path = project_root / 'db' / 'anime_data.db'
-        
-        if not db_path.exists():
-            st.error(f"❌ anime_data.db が見つかりません")
-            st.error(f"確認した場所: {db_path}")
-            return None
-        
-        st.info(f"📂 データベース接続: {db_path}")
-        
-        conn = sqlite3.connect(str(db_path))
-        
-        # 各原作タイプの統計を計算
-        query = """
-            WITH source_stats AS (
-                SELECT 
-                    source,
-                    COUNT(DISTINCT anilist_id) as source_count,
-                    MIN(seasonYear) as first_year,
-                    MAX(seasonYear) as last_year,
-                    MAX(seasonYear) - MIN(seasonYear) + 1 as year_range,
-                    CAST(COUNT(DISTINCT anilist_id) AS FLOAT) / 
-                        NULLIF(MAX(seasonYear) - MIN(seasonYear) + 1, 0) as count_per_year,
-                    AVG(meanScore) as avg_mean_score,
-                    SUM(favorites) as total_favorites,
-                    AVG(favorites) as avg_favorites,
-                    SUM(popularity) as total_popularity,
-                    AVG(popularity) as avg_popularity
-                FROM anime
-                WHERE source IS NOT NULL AND seasonYear IS NOT NULL
-                GROUP BY source
-            )
+    """原作データの読み込み（CTE使用）"""
+    query = """
+        WITH source_stats AS (
             SELECT 
-                a.anilist_id,
-                a.title_romaji,
-                a.title_native,
-                a.source,
-                a.season,
-                a.seasonYear,
-                a.favorites as anime_favorites,
-                a.popularity as anime_popularity,
-                a.meanScore,
-                a.format,
-                ss.source_count,
-                ss.first_year,
-                ss.year_range,
-                ss.count_per_year,
-                ss.avg_mean_score as source_avg_mean_score,
-                ss.total_favorites as source_total_favorites,
-                ss.avg_favorites as source_avg_favorites,
-                ss.total_popularity as source_total_popularity,
-                ss.avg_popularity as source_avg_popularity
-            FROM anime a
-            JOIN source_stats ss ON a.source = ss.source
-            WHERE a.source IS NOT NULL
-            ORDER BY ss.source_count DESC, a.favorites DESC
-        """
-        data = pd.read_sql_query(query, conn)
-        conn.close()
-        st.success(f"✅ 原作データ読み込み成功: {len(data):,}件")
-        return data
-        
-    except sqlite3.Error as e:
-        st.error(f"❌ データベースエラー: {e}")
-        return None
-    except Exception as e:
-        st.error(f"❌ 予期しないエラー: {e}")
-        return None
+                source,
+                COUNT(DISTINCT anilist_id) as source_count,
+                MIN(seasonYear) as first_year,
+                MAX(seasonYear) as last_year,
+                MAX(seasonYear) - MIN(seasonYear) + 1 as year_range,
+                CAST(COUNT(DISTINCT anilist_id) AS FLOAT) / 
+                    NULLIF(MAX(seasonYear) - MIN(seasonYear) + 1, 0) as count_per_year,
+                AVG(meanScore) as avg_mean_score,
+                SUM(favorites) as total_favorites,
+                AVG(favorites) as avg_favorites,
+                SUM(popularity) as total_popularity,
+                AVG(popularity) as avg_popularity
+            FROM anime
+            WHERE source IS NOT NULL AND seasonYear IS NOT NULL
+            GROUP BY source
+        )
+        SELECT 
+            a.anilist_id,
+            a.title_romaji,
+            a.title_native,
+            a.source,
+            a.season,
+            a.seasonYear,
+            a.favorites as anime_favorites,
+            a.popularity as anime_popularity,
+            a.meanScore,
+            a.format,
+            ss.source_count,
+            ss.first_year,
+            ss.year_range,
+            ss.count_per_year,
+            ss.avg_mean_score as source_avg_mean_score,
+            ss.total_favorites as source_total_favorites,
+            ss.avg_favorites as source_avg_favorites,
+            ss.total_popularity as source_total_popularity,
+            ss.avg_popularity as source_avg_popularity
+        FROM anime a
+        JOIN source_stats ss ON a.source = ss.source
+        WHERE a.source IS NOT NULL
+        ORDER BY ss.source_count DESC, a.favorites DESC
+    """
+    return load_data_from_db('anime_data.db', query, '原作データ読み込み成功')
 
 @st.cache_data
 def load_genre_data():
-    """ジャンルデータの読み込み"""
-    try:
-        # 絶対パスでデータベースの場所を指定
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-        
-        # バックアップ: 相対パスでも試行
-        if not db_path.exists():
-            current_file = Path(__file__).resolve()
-            project_root = current_file.parent.parent
-            db_path = project_root / 'db' / 'anime_data.db'
-        
-        if not db_path.exists():
-            st.error(f"❌ anime_data.db が見つかりません")
-            st.error(f"確認した場所: {db_path}")
-            return None
-        
-        st.info(f"📂 データベース接続: {db_path}")
-        
-        conn = sqlite3.connect(str(db_path))
-        
-        # 各ジャンルの統計を計算
-        query = """
-            WITH genre_stats AS (
-                SELECT 
-                    g.genre_name,
-                    COUNT(DISTINCT g.anilist_id) as genre_count,
-                    MIN(a.seasonYear) as first_year,
-                    MAX(a.seasonYear) as last_year,
-                    MAX(a.seasonYear) - MIN(a.seasonYear) + 1 as year_range,
-                    CAST(COUNT(DISTINCT g.anilist_id) AS FLOAT) / 
-                        NULLIF(MAX(a.seasonYear) - MIN(a.seasonYear) + 1, 0) as count_per_year,
-                    AVG(a.meanScore) as avg_mean_score,
-                    SUM(a.favorites) as total_favorites,
-                    AVG(a.favorites) as avg_favorites,
-                    SUM(a.popularity) as total_popularity,
-                    AVG(a.popularity) as avg_popularity
-                FROM genres g
-                JOIN anime a ON g.anilist_id = a.anilist_id
-                WHERE g.genre_name IS NOT NULL AND a.seasonYear IS NOT NULL
-                GROUP BY g.genre_name
-            )
+    """ジャンルデータの読み込み（CTE使用）"""
+    query = """
+        WITH genre_stats AS (
             SELECT 
-                a.anilist_id,
-                a.title_romaji,
-                a.title_native,
                 g.genre_name,
-                a.season,
-                a.seasonYear,
-                a.favorites as anime_favorites,
-                a.popularity as anime_popularity,
-                a.meanScore,
-                a.format,
-                gs.genre_count,
-                gs.first_year,
-                gs.year_range,
-                gs.count_per_year,
-                gs.avg_mean_score as genre_avg_mean_score,
-                gs.total_favorites as genre_total_favorites,
-                gs.avg_favorites as genre_avg_favorites,
-                gs.total_popularity as genre_total_popularity,
-                gs.avg_popularity as genre_avg_popularity
+                COUNT(DISTINCT g.anilist_id) as genre_count,
+                MIN(a.seasonYear) as first_year,
+                MAX(a.seasonYear) as last_year,
+                MAX(a.seasonYear) - MIN(a.seasonYear) + 1 as year_range,
+                CAST(COUNT(DISTINCT g.anilist_id) AS FLOAT) / 
+                    NULLIF(MAX(a.seasonYear) - MIN(a.seasonYear) + 1, 0) as count_per_year,
+                AVG(a.meanScore) as avg_mean_score,
+                SUM(a.favorites) as total_favorites,
+                AVG(a.favorites) as avg_favorites,
+                SUM(a.popularity) as total_popularity,
+                AVG(a.popularity) as avg_popularity
             FROM genres g
             JOIN anime a ON g.anilist_id = a.anilist_id
-            JOIN genre_stats gs ON g.genre_name = gs.genre_name
-            WHERE g.genre_name IS NOT NULL
-            ORDER BY gs.genre_count DESC, a.favorites DESC
-        """
-        data = pd.read_sql_query(query, conn)
-        conn.close()
-        st.success(f"✅ ジャンルデータ読み込み成功: {len(data):,}件")
-        return data
-        
-    except sqlite3.Error as e:
-        st.error(f"❌ データベースエラー: {e}")
-        return None
-    except Exception as e:
-        st.error(f"❌ 予期しないエラー: {e}")
-        return None
+            WHERE g.genre_name IS NOT NULL AND a.seasonYear IS NOT NULL
+            GROUP BY g.genre_name
+        )
+        SELECT 
+            a.anilist_id,
+            a.title_romaji,
+            a.title_native,
+            g.genre_name,
+            a.season,
+            a.seasonYear,
+            a.favorites as anime_favorites,
+            a.popularity as anime_popularity,
+            a.meanScore,
+            a.format,
+            gs.genre_count,
+            gs.first_year,
+            gs.year_range,
+            gs.count_per_year,
+            gs.avg_mean_score as genre_avg_mean_score,
+            gs.total_favorites as genre_total_favorites,
+            gs.avg_favorites as genre_avg_favorites,
+            gs.total_popularity as genre_total_popularity,
+            gs.avg_popularity as genre_avg_popularity
+        FROM genres g
+        JOIN anime a ON g.anilist_id = a.anilist_id
+        JOIN genre_stats gs ON g.genre_name = gs.genre_name
+        WHERE g.genre_name IS NOT NULL
+        ORDER BY gs.genre_count DESC, a.favorites DESC
+    """
+    return load_data_from_db('anime_data.db', query, 'ジャンルデータ読み込み成功')
 
 @st.cache_data
 def load_manga_genre_data():
-    """マンガジャンルデータの読み込み"""
-    try:
-        # 絶対パスでデータベースの場所を指定
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\manga_data.db')
-        
-        # バックアップ: 相対パスでも試行
-        if not db_path.exists():
-            current_file = Path(__file__).resolve()
-            project_root = current_file.parent.parent
-            db_path = project_root / 'db' / 'manga_data.db'
-        
-        if not db_path.exists():
-            st.error(f"❌ manga_data.db が見つかりません")
-            st.error(f"確認した場所: {db_path}")
-            return None
-        
-        st.info(f"📂 データベース接続: {db_path}")
-        
-        conn = sqlite3.connect(str(db_path))
-        
-        # 各ジャンルの統計を計算
-        query = """
-            WITH genre_stats AS (
-                SELECT 
-                    g.genre_name,
-                    COUNT(DISTINCT g.anilist_id) as genre_count,
-                    MIN(m.seasonYear) as first_year,
-                    MAX(m.seasonYear) as last_year,
-                    MAX(m.seasonYear) - MIN(m.seasonYear) + 1 as year_range,
-                    CAST(COUNT(DISTINCT g.anilist_id) AS FLOAT) / 
-                        NULLIF(MAX(m.seasonYear) - MIN(m.seasonYear) + 1, 0) as count_per_year,
-                    AVG(m.meanScore) as avg_mean_score,
-                    SUM(m.favorites) as total_favorites,
-                    AVG(m.favorites) as avg_favorites,
-                    SUM(m.popularity) as total_popularity,
-                    AVG(m.popularity) as avg_popularity
-                FROM genres g
-                JOIN manga m ON g.anilist_id = m.anilist_id
-                WHERE g.genre_name IS NOT NULL AND m.seasonYear IS NOT NULL
-                GROUP BY g.genre_name
-            )
+    """マンガジャンルデータの読み込み（CTE使用）"""
+    query = """
+        WITH genre_stats AS (
             SELECT 
-                m.anilist_id,
-                m.title_romaji,
-                m.title_native,
                 g.genre_name,
-                m.season,
-                m.seasonYear,
-                m.favorites as manga_favorites,
-                m.popularity as manga_popularity,
-                m.meanScore,
-                m.format,
-                m.source,
-                gs.genre_count,
-                gs.first_year,
-                gs.year_range,
-                gs.count_per_year,
-                gs.avg_mean_score as genre_avg_mean_score,
-                gs.total_favorites as genre_total_favorites,
-                gs.avg_favorites as genre_avg_favorites,
-                gs.total_popularity as genre_total_popularity,
-                gs.avg_popularity as genre_avg_popularity
+                COUNT(DISTINCT g.anilist_id) as genre_count,
+                MIN(m.seasonYear) as first_year,
+                MAX(m.seasonYear) as last_year,
+                MAX(m.seasonYear) - MIN(m.seasonYear) + 1 as year_range,
+                CAST(COUNT(DISTINCT g.anilist_id) AS FLOAT) / 
+                    NULLIF(MAX(m.seasonYear) - MIN(m.seasonYear) + 1, 0) as count_per_year,
+                AVG(m.meanScore) as avg_mean_score,
+                SUM(m.favorites) as total_favorites,
+                AVG(m.favorites) as avg_favorites,
+                SUM(m.popularity) as total_popularity,
+                AVG(m.popularity) as avg_popularity
             FROM genres g
             JOIN manga m ON g.anilist_id = m.anilist_id
-            JOIN genre_stats gs ON g.genre_name = gs.genre_name
-            WHERE g.genre_name IS NOT NULL
-            ORDER BY gs.genre_count DESC, m.favorites DESC
-        """
-        data = pd.read_sql_query(query, conn)
-        conn.close()
-        st.success(f"✅ マンガジャンルデータ読み込み成功: {len(data):,}件")
-        return data
-        
-    except sqlite3.Error as e:
-        st.error(f"❌ データベースエラー: {e}")
-        return None
-    except Exception as e:
-        st.error(f"❌ 予期しないエラー: {e}")
-        return None
+            WHERE g.genre_name IS NOT NULL AND m.seasonYear IS NOT NULL
+            GROUP BY g.genre_name
+        )
+        SELECT 
+            m.anilist_id,
+            m.title_romaji,
+            m.title_native,
+            g.genre_name,
+            m.season,
+            m.seasonYear,
+            m.favorites as manga_favorites,
+            m.popularity as manga_popularity,
+            m.meanScore,
+            m.format,
+            m.source,
+            gs.genre_count,
+            gs.first_year,
+            gs.year_range,
+            gs.count_per_year,
+            gs.avg_mean_score as genre_avg_mean_score,
+            gs.total_favorites as genre_total_favorites,
+            gs.avg_favorites as genre_avg_favorites,
+            gs.total_popularity as genre_total_popularity,
+            gs.avg_popularity as genre_avg_popularity
+        FROM genres g
+        JOIN manga m ON g.anilist_id = m.anilist_id
+        JOIN genre_stats gs ON g.genre_name = gs.genre_name
+        WHERE g.genre_name IS NOT NULL
+        ORDER BY gs.genre_count DESC, m.favorites DESC
+    """
+    return load_data_from_db('manga_data.db', query, 'マンガジャンルデータ読み込み成功')
 
 @st.cache_data
 def load_manga_character_data():
-    """マンガキャラクターデータの読み込み"""
+    """マンガキャラクターデータの読み込み（テーブル存在確認付き）"""
     try:
-        # 絶対パスでデータベースの場所を指定
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\manga_data.db')
-        
-        # バックアップ: 相対パスでも試行
-        if not db_path.exists():
-            current_file = Path(__file__).resolve()
-            project_root = current_file.parent.parent
-            db_path = project_root / 'db' / 'manga_data.db'
+        db_path = get_db_path('manga_data.db')
         
         if not db_path.exists():
             st.error(f"❌ manga_data.db が見つかりません")
-            st.error(f"確認した場所: {db_path}")
             return None
         
         st.info(f"📂 データベース接続: {db_path}")
         
-        # マンガデータベースにcharactersテーブルがあるか確認
+        # テーブル存在確認
         conn = sqlite3.connect(str(db_path))
         cursor = conn.cursor()
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='characters'")
@@ -575,38 +686,27 @@ def load_manga_character_data():
         st.success(f"✅ マンガキャラクターデータ読み込み成功: {len(data):,}件")
         return data
         
-    except sqlite3.Error as e:
-        st.error(f"❌ データベースエラー: {e}")
-        return None
     except Exception as e:
-        st.error(f"❌ 予期しないエラー: {e}")
+        st.error(f"❌ エラー: {e}")
         return None
 
 @st.cache_data
 def load_manga_staff_data():
-    """マンガスタッフデータの読み込み"""
+    """マンガスタッフデータの読み込み（条件分岐付き）"""
     try:
-        # 絶対パスでデータベースの場所を指定
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\manga_data.db')
-        
-        # バックアップ: 相対パスでも試行
-        if not db_path.exists():
-            current_file = Path(__file__).resolve()
-            project_root = current_file.parent.parent
-            db_path = project_root / 'db' / 'manga_data.db'
+        db_path = get_db_path('manga_data.db')
         
         if not db_path.exists():
             st.error(f"❌ manga_data.db が見つかりません")
-            st.error(f"確認した場所: {db_path}")
             return None
         
         st.info(f"📂 データベース接続: {db_path}")
         
-        # マンガデータベースにstaffテーブルがあるか確認
         conn = sqlite3.connect(str(db_path))
         cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='staff'")
         
+        # staffテーブル存在確認
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='staff'")
         if not cursor.fetchone():
             conn.close()
             st.warning("⚠️ manga_data.dbにstaffテーブルが存在しません。")
@@ -650,53 +750,22 @@ def load_manga_staff_data():
         st.success(f"✅ マンガスタッフデータ読み込み成功: {len(data):,}件")
         return data
         
-    except sqlite3.Error as e:
-        st.error(f"❌ データベースエラー: {e}")
-        return None
     except Exception as e:
-        st.error(f"❌ 予期しないエラー: {e}")
+        st.error(f"❌ エラー: {e}")
         return None
 
 @st.cache_data
 def load_manga_data():
     """マンガデータの読み込み"""
-    try:
-        # 絶対パスでデータベースの場所を指定
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\manga_data.db')
-        
-        # バックアップ: 相対パスでも試行
-        if not db_path.exists():
-            current_file = Path(__file__).resolve()
-            project_root = current_file.parent.parent
-            db_path = project_root / 'db' / 'manga_data.db'
-        
-        if not db_path.exists():
-            st.error(f"❌ manga_data.db が見つかりません")
-            st.error(f"確認した場所: {db_path}")
-            return None
-        
-        st.info(f"📂 データベース接続: {db_path}")
-        
-        conn = sqlite3.connect(str(db_path))
-        query = """
-            SELECT 
-                m.anilist_id, m.title_romaji, m.title_native, m.format,
-                m.season, m.seasonYear, m.meanScore, m.favorites, m.popularity, m.source
-            FROM manga m
-            WHERE m.title_romaji IS NOT NULL
-            ORDER BY m.meanScore DESC NULLS LAST
-        """
-        data = pd.read_sql_query(query, conn)
-        conn.close()
-        st.success(f"✅ マンガデータ読み込み成功: {len(data):,}件")
-        return data
-        
-    except sqlite3.Error as e:
-        st.error(f"❌ データベースエラー: {e}")
-        return None
-    except Exception as e:
-        st.error(f"❌ 予期しないエラー: {e}")
-        return None
+    query = """
+        SELECT 
+            m.anilist_id, m.title_romaji, m.title_native, m.format,
+            m.season, m.seasonYear, m.meanScore, m.favorites, m.popularity, m.source
+        FROM manga m
+        WHERE m.title_romaji IS NOT NULL
+        ORDER BY m.meanScore DESC NULLS LAST
+    """
+    return load_data_from_db('manga_data.db', query, 'マンガデータ読み込み成功')
 
 def get_unique_values(data, column):
     """指定されたカラムのユニークな値を取得"""
@@ -749,106 +818,12 @@ def show_ranking_tab(data, genre):
         st.warning("データが利用できません。")
         return
     
-    # フィルター設定
-    st.subheader("🔧 フィルター設定")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        # 指標選択
-        metric_options = ["meanScore", "favorites", "popularity"]
-        metric_labels = {
-            "meanScore": "平均スコア",
-            "favorites": "お気に入り数", 
-            "popularity": "人気度"
-        }
-        selected_metric = st.selectbox(
-            "指標",
-            metric_options,
-            format_func=lambda x: metric_labels.get(x, x)
-        )
-    
-    with col2:
-        # 年度選択
-        if 'seasonYear' in data.columns:
-            years = ["全て"] + [str(int(year)) for year in get_unique_values(data, 'seasonYear')]
-            selected_year = st.selectbox("年度", years)
-        else:
-            selected_year = "全て"
-    
-    with col3:
-        # 季節選択
-        if 'season' in data.columns:
-            seasons = ["全て"] + get_unique_values(data, 'season')
-            selected_season = st.selectbox("季節", seasons)
-        else:
-            selected_season = "全て"
-    
-    # 追加フィルター
-    col4, col5, col6 = st.columns(3)
-    
-    with col4:
-        # 原作選択
-        if 'source' in data.columns:
-            sources = ["全て"] + get_unique_values(data, 'source')
-            selected_source = st.selectbox("原作", sources)
-        else:
-            selected_source = "全て"
-    
-    with col5:
-        # フォーマット選択
-        if 'format' in data.columns:
-            formats = ["全て"] + get_unique_values(data, 'format')
-            selected_format = st.selectbox("フォーマット", formats)
-        else:
-            selected_format = "全て"
-    
-    with col6:
-        # ジャンル選択（データベースから取得）
-        if genre == "アニメ":
-            # 絶対パスでデータベースの場所を指定
-            db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-            
-            if db_path.exists():
-                available_genres = get_genres_data(db_path)
-                genres_options = ["全て"] + available_genres
-                selected_genre_filter = st.selectbox("ジャンル", genres_options)
-            else:
-                selected_genre_filter = st.selectbox("ジャンル", ["全て"])
-        else:
-            # マンガの場合もジャンルデータベースから取得
-            db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\manga_data.db')
-            
-            if db_path.exists():
-                available_genres = get_genres_data(db_path)
-                genres_options = ["全て"] + available_genres
-                selected_genre_filter = st.selectbox("ジャンル", genres_options)
-            else:
-                selected_genre_filter = st.selectbox("ジャンル", ["全て"])
+    # フィルター設定（共通化）
+    db_type = 'anime' if genre == "アニメ" else 'manga'
+    filters, selected_metric = create_filter_ui(data, f"ranking_{genre}", db_type, show_metric=True)
     
     # フィルター適用
-    filters = {}
-    if selected_year != "全て":
-        try:
-            filters['seasonYear'] = float(selected_year)
-        except ValueError:
-            pass
-    if selected_season != "全て":
-        filters['season'] = selected_season
-    
-    if selected_source != "全て":
-        filters['source'] = selected_source
-    if selected_format != "全て":
-        filters['format'] = selected_format
-    if selected_genre_filter != "全て":
-        filters['genre'] = selected_genre_filter
-    
-    # データベースパスを絶対パスで指定
-    if genre == "アニメ":
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-    else:
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\manga_data.db')
-    
-    filtered_data = filter_data(data, filters, db_path if db_path.exists() else None)
+    filtered_data = apply_filters_to_data(data, filters, db_type)
     
     if filtered_data.empty:
         st.warning("選択された条件に一致するデータがありません。")
@@ -920,6 +895,13 @@ def show_ranking_tab(data, genre):
     if len(sorted_data) >= 1:
         st.subheader("📊 トップ10チャート")
         
+        # メトリックラベル定義
+        metric_labels = {
+            "meanScore": "平均スコア",
+            "favorites": "お気に入り数", 
+            "popularity": "人気度"
+        }
+        
         top10_data = sorted_data.head(10)
         
         if not top10_data.empty:
@@ -940,737 +922,126 @@ def show_ranking_tab(data, genre):
 
 def show_character_ranking_tab(data):
     """キャラクターランキングタブの表示"""
-    st.header("🎭 キャラクター ランキング")
-    
-    if data is None or data.empty:
-        st.warning("データが利用できません。")
-        return
-    
-    # フィルター設定
-    st.subheader("🔧 フィルター設定")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        # 年度選択
-        if 'seasonYear' in data.columns:
-            years = ["全て"] + [str(int(year)) for year in get_unique_values(data, 'seasonYear')]
-            selected_year = st.selectbox("年度", years, key="char_year")
-        else:
-            selected_year = "全て"
-    
-    with col2:
-        # 季節選択
-        if 'season' in data.columns:
-            seasons = ["全て"] + get_unique_values(data, 'season')
-            selected_season = st.selectbox("季節", seasons, key="char_season")
-        else:
-            selected_season = "全て"
-    
-    with col3:
-        # 原作選択
-        if 'source' in data.columns:
-            sources = ["全て"] + get_unique_values(data, 'source')
-            selected_source = st.selectbox("原作", sources, key="char_source")
-        else:
-            selected_source = "全て"
-    
-    # 追加フィルター
-    col4, col5 = st.columns(2)
-    
-    with col4:
-        # フォーマット選択
-        if 'format' in data.columns:
-            formats = ["全て"] + get_unique_values(data, 'format')
-            selected_format = st.selectbox("フォーマット", formats, key="char_format")
-        else:
-            selected_format = "全て"
-    
-    with col5:
-        # ジャンル選択（データベースから取得）
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-        
-        if db_path.exists():
-            available_genres = get_genres_data(db_path)
-            genres_options = ["全て"] + available_genres
-            selected_genre_filter = st.selectbox("ジャンル", genres_options, key="char_genre")
-        else:
-            selected_genre_filter = st.selectbox("ジャンル", ["全て"], key="char_genre")
-    
-    # フィルター適用
-    filters = {}
-    if selected_year != "全て":
-        try:
-            filters['seasonYear'] = float(selected_year)
-        except ValueError:
-            pass
-    if selected_season != "全て":
-        filters['season'] = selected_season
-    if selected_source != "全て":
-        filters['source'] = selected_source
-    if selected_format != "全て":
-        filters['format'] = selected_format
-    if selected_genre_filter != "全て":
-        filters['genre'] = selected_genre_filter
-    
-    # フィルター適用（ジャンルフィルターはanilist_idベースで処理）
-    filtered_data = data.copy()
-    
-    # ジャンルフィルターの処理
-    if 'genre' in filters and filters['genre']:
-        try:
-            conn = sqlite3.connect(str(db_path))
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT DISTINCT anilist_id 
-                FROM genres 
-                WHERE genre_name = ?
-            """, (filters['genre'],))
-            genre_anime_ids = [row[0] for row in cursor.fetchall()]
-            conn.close()
-            
-            if genre_anime_ids:
-                filtered_data = filtered_data[filtered_data['anilist_id'].isin(genre_anime_ids)]
-            else:
-                filtered_data = filtered_data.iloc[0:0]
-        except Exception as e:
-            st.error(f"ジャンルフィルター適用エラー: {e}")
-    
-    # その他のフィルター処理
-    for key, value in filters.items():
-        if key != 'genre' and value and key in filtered_data.columns:
-            filtered_data = filtered_data[filtered_data[key] == value]
-    
-    if filtered_data.empty:
-        st.warning("選択された条件に一致するデータがありません。")
-        return
-    
-    # フィルター適用後のデータ件数を取得
-    filtered_count = len(filtered_data)
-    
-    # ランキング表示
-    st.subheader(f"📋 ランキング結果 ({filtered_count:,}件）")
-    
-    # キャラクターIDが重複している場合、アニメのfavoritesが最も多いものだけを残す
-    filtered_data = filtered_data.sort_values(['chara_id', 'anime_favorites'], ascending=[True, False]).groupby('chara_id').first().reset_index()
-    
-    # データをキャラクターのお気に入り数でソート
-    sorted_data = filtered_data.sort_values('char_favorites', ascending=False).reset_index(drop=True)
-    
-    # 表示用データフレーム準備
-    display_columns = ['chara_name', 'title_native', 'seasonYear', 'season', 
-                      'char_favorites', 'anime_favorites', 'anime_popularity', 'meanScore']
-    available_columns = [col for col in display_columns if col in sorted_data.columns]
-    display_data = sorted_data[available_columns].copy()
-    
-    # カラム名を日本語に変更
-    column_mapping = {
-        'chara_name': 'キャラクター名',
-        'title_native': 'アニメタイトル',
-        'seasonYear': '年度',
-        'season': '季節',
-        'char_favorites': 'キャラクターお気に入り数',
-        'anime_favorites': 'アニメお気に入り数',
-        'anime_popularity': 'アニメ人気度',
-        'meanScore': 'アニメ平均スコア'
+    config = {
+        'title': '🎭 キャラクター ランキング',
+        'key_prefix': 'char',
+        'db_type': 'anime',
+        'dedup_config': {'id_col': 'chara_id', 'sort_col': 'anime_favorites', 'sort_by': 'anime_favorites'},
+        'sort_by': 'char_favorites',
+        'display_columns': ['chara_name', 'title_native', 'seasonYear', 'season', 
+                          'char_favorites', 'anime_favorites', 'anime_popularity', 'meanScore'],
+        'column_mapping': {
+            'chara_name': 'キャラクター名',
+            'title_native': 'アニメタイトル',
+            'seasonYear': '年度',
+            'season': '季節',
+            'char_favorites': 'キャラクターお気に入り数',
+            'anime_favorites': 'アニメお気に入り数',
+            'anime_popularity': 'アニメ人気度',
+            'meanScore': 'アニメ平均スコア'
+        },
+        'chart_config': {
+            'x': 'chara_name',
+            'y': 'char_favorites',
+            'title': 'トップ10 - キャラクターお気に入り数',
+            'labels': {'chara_name': 'キャラクター名', 'char_favorites': 'お気に入り数'},
+            'hover_data': ['title_native', 'seasonYear', 'season']
+        }
     }
-    
-    # 数値フォーマット - 数値型を維持
-    if 'char_favorites' in display_data.columns:
-        display_data['char_favorites'] = pd.to_numeric(display_data['char_favorites'], errors='coerce')
-    if 'anime_favorites' in display_data.columns:
-        display_data['anime_favorites'] = pd.to_numeric(display_data['anime_favorites'], errors='coerce')
-    if 'anime_popularity' in display_data.columns:
-        display_data['anime_popularity'] = pd.to_numeric(display_data['anime_popularity'], errors='coerce')
-    if 'meanScore' in display_data.columns:
-        display_data['meanScore'] = pd.to_numeric(display_data['meanScore'], errors='coerce')
-    if 'seasonYear' in display_data.columns:
-        display_data['seasonYear'] = pd.to_numeric(display_data['seasonYear'], errors='coerce')
-    
-    # カラム名を変更
-    display_data = display_data.rename(columns=column_mapping)
-    
-    # インデックスを順位に設定
-    display_data.index = range(1, len(display_data) + 1)
-    display_data.index.name = "順位"
-    
-    # 表示
-    st.dataframe(display_data, width='stretch', height=400)
-    
-    # トップ10のチャート表示
-    if len(sorted_data) >= 1:
-        st.subheader("📊 トップ10チャート")
-        
-        top10_data = sorted_data.head(10)
-        
-        if not top10_data.empty:
-            fig = px.bar(
-                top10_data,
-                x='chara_name',
-                y='char_favorites',
-                title=f"トップ10 - キャラクターお気に入り数",
-                labels={
-                    'chara_name': 'キャラクター名',
-                    'char_favorites': 'お気に入り数'
-                },
-                hover_data=['title_native', 'seasonYear', 'season']
-            )
-            fig.update_xaxes(tickangle=45)
-            fig.update_layout(height=500)
-            st.plotly_chart(fig, width='stretch')
+    show_ranking_template(data, config)
 
 def show_manga_character_ranking_tab(data):
     """マンガキャラクターランキングタブの表示"""
-    st.header("📚 マンガキャラクター ランキング")
-    
-    if data is None or data.empty:
-        st.warning("データが利用できません。")
-        return
-    
-    # フィルター設定
-    st.subheader("🔧 フィルター設定")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        # 年度選択
-        if 'seasonYear' in data.columns:
-            years = ["全て"] + [str(int(year)) for year in get_unique_values(data, 'seasonYear')]
-            selected_year = st.selectbox("年度", years, key="manga_char_year")
-        else:
-            selected_year = "全て"
-    
-    with col2:
-        # 季節選択
-        if 'season' in data.columns:
-            seasons = ["全て"] + get_unique_values(data, 'season')
-            selected_season = st.selectbox("季節", seasons, key="manga_char_season")
-        else:
-            selected_season = "全て"
-    
-    with col3:
-        # 原作選択
-        if 'source' in data.columns:
-            sources = ["全て"] + get_unique_values(data, 'source')
-            selected_source = st.selectbox("原作", sources, key="manga_char_source")
-        else:
-            selected_source = "全て"
-    
-    # 追加フィルター
-    col4, col5 = st.columns(2)
-    
-    with col4:
-        # フォーマット選択
-        if 'format' in data.columns:
-            formats = ["全て"] + get_unique_values(data, 'format')
-            selected_format = st.selectbox("フォーマット", formats, key="manga_char_format")
-        else:
-            selected_format = "全て"
-    
-    with col5:
-        # ジャンル選択（データベースから取得）
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\manga_data.db')
-        
-        if db_path.exists():
-            available_genres = get_genres_data(db_path)
-            genres_options = ["全て"] + available_genres
-            selected_genre_filter = st.selectbox("ジャンル", genres_options, key="manga_char_genre")
-        else:
-            selected_genre_filter = st.selectbox("ジャンル", ["全て"], key="manga_char_genre")
-    
-    # フィルター適用
-    filters = {}
-    if selected_year != "全て":
-        try:
-            filters['seasonYear'] = float(selected_year)
-        except ValueError:
-            pass
-    if selected_season != "全て":
-        filters['season'] = selected_season
-    if selected_source != "全て":
-        filters['source'] = selected_source
-    if selected_format != "全て":
-        filters['format'] = selected_format
-    if selected_genre_filter != "全て":
-        filters['genre'] = selected_genre_filter
-    
-    # フィルター適用（ジャンルフィルターはanilist_idベースで処理）
-    filtered_data = data.copy()
-    
-    # ジャンルフィルターの処理
-    if 'genre' in filters and filters['genre']:
-        try:
-            conn = sqlite3.connect(str(db_path))
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT DISTINCT anilist_id 
-                FROM genres 
-                WHERE genre_name = ?
-            """, (filters['genre'],))
-            genre_manga_ids = [row[0] for row in cursor.fetchall()]
-            conn.close()
-            
-            if genre_manga_ids:
-                filtered_data = filtered_data[filtered_data['anilist_id'].isin(genre_manga_ids)]
-            else:
-                filtered_data = filtered_data.iloc[0:0]
-        except Exception as e:
-            st.error(f"ジャンルフィルター適用エラー: {e}")
-    
-    # その他のフィルター処理
-    for key, value in filters.items():
-        if key != 'genre' and value and key in filtered_data.columns:
-            filtered_data = filtered_data[filtered_data[key] == value]
-    
-    if filtered_data.empty:
-        st.warning("選択された条件に一致するデータがありません。")
-        return
-    
-    # フィルター適用後のデータ件数を取得
-    filtered_count = len(filtered_data)
-    
-    # ランキング表示
-    st.subheader(f"📋 ランキング結果 ({filtered_count:,}件）")
-    
-    # キャラクターIDが重複している場合、マンガのfavoritesが最も多いものだけを残す
-    filtered_data = filtered_data.sort_values(['chara_id', 'manga_favorites'], ascending=[True, False]).groupby('chara_id').first().reset_index()
-    
-    # データをキャラクターのお気に入り数でソート
-    sorted_data = filtered_data.sort_values('char_favorites', ascending=False).reset_index(drop=True)
-    
-    # 表示用データフレーム準備
-    display_columns = ['chara_name', 'title_native', 'seasonYear', 'season', 
-                      'char_favorites', 'manga_favorites', 'manga_popularity', 'meanScore']
-    available_columns = [col for col in display_columns if col in sorted_data.columns]
-    display_data = sorted_data[available_columns].copy()
-    
-    # カラム名を日本語に変更
-    column_mapping = {
-        'chara_name': 'キャラクター名',
-        'title_native': 'マンガタイトル',
-        'seasonYear': '年度',
-        'season': '季節',
-        'char_favorites': 'キャラクターお気に入り数',
-        'manga_favorites': 'マンガお気に入り数',
-        'manga_popularity': 'マンガ人気度',
-        'meanScore': 'マンガ平均スコア'
+    config = {
+        'title': '📚 マンガキャラクター ランキング',
+        'key_prefix': 'manga_char',
+        'db_type': 'manga',
+        'dedup_config': {'id_col': 'chara_id', 'sort_col': 'manga_favorites', 'sort_by': 'manga_favorites'},
+        'sort_by': 'char_favorites',
+        'display_columns': ['chara_name', 'title_native', 'seasonYear', 'season', 
+                          'char_favorites', 'manga_favorites', 'manga_popularity', 'meanScore'],
+        'column_mapping': {
+            'chara_name': 'キャラクター名',
+            'title_native': 'マンガタイトル',
+            'seasonYear': '年度',
+            'season': '季節',
+            'char_favorites': 'キャラクターお気に入り数',
+            'manga_favorites': 'マンガお気に入り数',
+            'manga_popularity': 'マンガ人気度',
+            'meanScore': 'マンガ平均スコア'
+        },
+        'chart_config': {
+            'x': 'chara_name',
+            'y': 'char_favorites',
+            'title': 'トップ10 - キャラクターお気に入り数',
+            'labels': {'chara_name': 'キャラクター名', 'char_favorites': 'お気に入り数'},
+            'hover_data': ['title_native', 'seasonYear', 'season']
+        }
     }
-    
-    # 数値フォーマット - 数値型を維持
-    if 'char_favorites' in display_data.columns:
-        display_data['char_favorites'] = pd.to_numeric(display_data['char_favorites'], errors='coerce')
-    if 'manga_favorites' in display_data.columns:
-        display_data['manga_favorites'] = pd.to_numeric(display_data['manga_favorites'], errors='coerce')
-    if 'manga_popularity' in display_data.columns:
-        display_data['manga_popularity'] = pd.to_numeric(display_data['manga_popularity'], errors='coerce')
-    if 'meanScore' in display_data.columns:
-        display_data['meanScore'] = pd.to_numeric(display_data['meanScore'], errors='coerce')
-    if 'seasonYear' in display_data.columns:
-        display_data['seasonYear'] = pd.to_numeric(display_data['seasonYear'], errors='coerce')
-    
-    # カラム名を変更
-    display_data = display_data.rename(columns=column_mapping)
-    
-    # インデックスを順位に設定
-    display_data.index = range(1, len(display_data) + 1)
-    display_data.index.name = "順位"
-    
-    # 表示
-    st.dataframe(display_data, width='stretch', height=400)
-    
-    # トップ10のチャート表示
-    if len(sorted_data) >= 1:
-        st.subheader("📊 トップ10チャート")
-        
-        top10_data = sorted_data.head(10)
-        
-        if not top10_data.empty:
-            fig = px.bar(
-                top10_data,
-                x='chara_name',
-                y='char_favorites',
-                title=f"トップ10 - キャラクターお気に入り数",
-                labels={
-                    'chara_name': 'キャラクター名',
-                    'char_favorites': 'お気に入り数'
-                },
-                hover_data=['title_native', 'seasonYear', 'season']
-            )
-            fig.update_xaxes(tickangle=45)
-            fig.update_layout(height=500)
-            st.plotly_chart(fig, width='stretch')
+    show_ranking_template(data, config)
 
 def show_voiceactor_ranking_tab(data):
     """声優ランキングタブの表示"""
-    st.header("🎤 声優 ランキング")
-    
-    if data is None or data.empty:
-        st.warning("データが利用できません。")
-        return
-    
-    # フィルター設定
-    st.subheader("🔧 フィルター設定")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        # 年度選択
-        if 'seasonYear' in data.columns:
-            years = ["全て"] + [str(int(year)) for year in get_unique_values(data, 'seasonYear')]
-            selected_year = st.selectbox("年度", years, key="va_year")
-        else:
-            selected_year = "全て"
-    
-    with col2:
-        # 季節選択
-        if 'season' in data.columns:
-            seasons = ["全て"] + get_unique_values(data, 'season')
-            selected_season = st.selectbox("季節", seasons, key="va_season")
-        else:
-            selected_season = "全て"
-    
-    with col3:
-        # 原作選択
-        if 'source' in data.columns:
-            sources = ["全て"] + get_unique_values(data, 'source')
-            selected_source = st.selectbox("原作", sources, key="va_source")
-        else:
-            selected_source = "全て"
-    
-    # 追加フィルター
-    col4, col5 = st.columns(2)
-    
-    with col4:
-        # フォーマット選択
-        if 'format' in data.columns:
-            formats = ["全て"] + get_unique_values(data, 'format')
-            selected_format = st.selectbox("フォーマット", formats, key="va_format")
-        else:
-            selected_format = "全て"
-    
-    with col5:
-        # ジャンル選択（データベースから取得）
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-        
-        if db_path.exists():
-            available_genres = get_genres_data(db_path)
-            genres_options = ["全て"] + available_genres
-            selected_genre_filter = st.selectbox("ジャンル", genres_options, key="va_genre")
-        else:
-            selected_genre_filter = st.selectbox("ジャンル", ["全て"], key="va_genre")
-    
-    # フィルター適用
-    filters = {}
-    if selected_year != "全て":
-        try:
-            filters['seasonYear'] = float(selected_year)
-        except ValueError:
-            pass
-    if selected_season != "全て":
-        filters['season'] = selected_season
-    if selected_source != "全て":
-        filters['source'] = selected_source
-    if selected_format != "全て":
-        filters['format'] = selected_format
-    if selected_genre_filter != "全て":
-        filters['genre'] = selected_genre_filter
-    
-    # フィルター適用（ジャンルフィルターはanilist_idベースで処理）
-    filtered_data = data.copy()
-    
-    # ジャンルフィルターの処理
-    if 'genre' in filters and filters['genre']:
-        try:
-            conn = sqlite3.connect(str(db_path))
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT DISTINCT anilist_id 
-                FROM genres 
-                WHERE genre_name = ?
-            """, (filters['genre'],))
-            genre_anime_ids = [row[0] for row in cursor.fetchall()]
-            conn.close()
-            
-            if genre_anime_ids:
-                filtered_data = filtered_data[filtered_data['anilist_id'].isin(genre_anime_ids)]
-            else:
-                filtered_data = filtered_data.iloc[0:0]
-        except Exception as e:
-            st.error(f"ジャンルフィルター適用エラー: {e}")
-    
-    # その他のフィルター処理
-    for key, value in filters.items():
-        if key != 'genre' and value and key in filtered_data.columns:
-            filtered_data = filtered_data[filtered_data[key] == value]
-    
-    if filtered_data.empty:
-        st.warning("選択された条件に一致するデータがありません。")
-        return
-    
-    # フィルター適用後のデータ件数を取得
-    filtered_count = len(filtered_data)
-    
-    # ランキング表示
-    st.subheader(f"📋 ランキング結果 ({filtered_count:,}件）")
-    
-    # 声優IDが重複している場合、アニメのfavoritesが最も多いものだけを残す
-    filtered_data = filtered_data.sort_values(['voiceactor_id', 'anime_favorites'], ascending=[True, False]).groupby('voiceactor_id').first().reset_index()
-    
-    # データを声優のお気に入り数でソート
-    sorted_data = filtered_data.sort_values('va_favorites', ascending=False).reset_index(drop=True)
-    
-    # 表示用データフレーム準備
-    display_columns = ['voiceactor_name', 'title_native', 'seasonYear', 'season', 
-                      'voiceactor_count', 'count_per_year', 'va_favorites', 'anime_favorites', 'meanScore']
-    available_columns = [col for col in display_columns if col in sorted_data.columns]
-    display_data = sorted_data[available_columns].copy()
-    
-    # カラム名を日本語に変更
-    column_mapping = {
-        'voiceactor_name': '声優名',
-        'title_native': 'アニメタイトル',
-        'seasonYear': '年度',
-        'season': '季節',
-        'voiceactor_count': '声優カウント数',
-        'count_per_year': '声優年平均カウント数',
-        'va_favorites': '声優お気に入り数',
-        'anime_favorites': 'アニメお気に入り数',
-        'meanScore': 'アニメ平均スコア'
+    config = {
+        'title': '🎤 声優 ランキング',
+        'key_prefix': 'voiceactor',
+        'db_type': 'anime',
+        'dedup_config': {'id_col': 'voiceactor_id', 'sort_col': 'anime_favorites', 'sort_by': 'anime_favorites'},
+        'sort_by': 'va_favorites',
+        'display_columns': ['voiceactor_name', 'title_native', 'seasonYear', 'season', 
+                          'voiceactor_count', 'count_per_year', 'va_favorites', 'anime_favorites', 'meanScore'],
+        'column_mapping': {
+            'voiceactor_name': '声優名',
+            'title_native': 'アニメタイトル',
+            'seasonYear': '年度',
+            'season': '季節',
+            'voiceactor_count': '声優カウント数',
+            'count_per_year': '声優年平均カウント数',
+            'va_favorites': '声優お気に入り数',
+            'anime_favorites': 'アニメお気に入り数',
+            'meanScore': 'アニメ平均スコア'
+        },
+        'chart_config': {
+            'x': 'voiceactor_name',
+            'y': 'va_favorites',
+            'title': 'トップ10 - 声優お気に入り数',
+            'labels': {'voiceactor_name': '声優名', 'va_favorites': 'お気に入り数'},
+            'hover_data': ['title_native', 'seasonYear', 'season']
+        }
     }
-    
-    # 数値フォーマット - 数値型を維持
-    if 'voiceactor_count' in display_data.columns:
-        display_data['voiceactor_count'] = pd.to_numeric(display_data['voiceactor_count'], errors='coerce')
-    if 'count_per_year' in display_data.columns:
-        display_data['count_per_year'] = pd.to_numeric(display_data['count_per_year'], errors='coerce')
-    if 'va_favorites' in display_data.columns:
-        display_data['va_favorites'] = pd.to_numeric(display_data['va_favorites'], errors='coerce')
-    if 'anime_favorites' in display_data.columns:
-        display_data['anime_favorites'] = pd.to_numeric(display_data['anime_favorites'], errors='coerce')
-    if 'meanScore' in display_data.columns:
-        display_data['meanScore'] = pd.to_numeric(display_data['meanScore'], errors='coerce')
-    if 'seasonYear' in display_data.columns:
-        display_data['seasonYear'] = pd.to_numeric(display_data['seasonYear'], errors='coerce')
-    
-    # カラム名を変更
-    display_data = display_data.rename(columns=column_mapping)
-    
-    # インデックスを順位に設定
-    display_data.index = range(1, len(display_data) + 1)
-    display_data.index.name = "順位"
-    
-    # 表示
-    st.dataframe(display_data, width='stretch', height=400)
-    
-    # トップ10のチャート表示
-    if len(sorted_data) >= 1:
-        st.subheader("📊 トップ10チャート")
-        
-        top10_data = sorted_data.head(10)
-        
-        if not top10_data.empty:
-            fig = px.bar(
-                top10_data,
-                x='voiceactor_name',
-                y='va_favorites',
-                title=f"トップ10 - 声優お気に入り数",
-                labels={
-                    'voiceactor_name': '声優名',
-                    'va_favorites': 'お気に入り数'
-                },
-                hover_data=['title_native', 'seasonYear', 'season']
-            )
-            fig.update_xaxes(tickangle=45)
-            fig.update_layout(height=500)
-            st.plotly_chart(fig, width='stretch')
+    show_ranking_template(data, config)
 
 def show_staff_ranking_tab(data):
     """スタッフランキングタブの表示"""
-    st.header("🎬 スタッフ ランキング")
-    
-    if data is None or data.empty:
-        st.warning("データが利用できません。")
-        return
-    
-    # フィルター設定
-    st.subheader("🔧 フィルター設定")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        # 年度選択
-        if 'seasonYear' in data.columns:
-            years = ["全て"] + [str(int(year)) for year in get_unique_values(data, 'seasonYear')]
-            selected_year = st.selectbox("年度", years, key="staff_year")
-        else:
-            selected_year = "全て"
-    
-    with col2:
-        # 季節選択
-        if 'season' in data.columns:
-            seasons = ["全て"] + get_unique_values(data, 'season')
-            selected_season = st.selectbox("季節", seasons, key="staff_season")
-        else:
-            selected_season = "全て"
-    
-    with col3:
-        # 原作選択
-        if 'source' in data.columns:
-            sources = ["全て"] + get_unique_values(data, 'source')
-            selected_source = st.selectbox("原作", sources, key="staff_source")
-        else:
-            selected_source = "全て"
-    
-    # 追加フィルター
-    col4, col5 = st.columns(2)
-    
-    with col4:
-        # フォーマット選択
-        if 'format' in data.columns:
-            formats = ["全て"] + get_unique_values(data, 'format')
-            selected_format = st.selectbox("フォーマット", formats, key="staff_format")
-        else:
-            selected_format = "全て"
-    
-    with col5:
-        # ジャンル選択（データベースから取得）
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-        
-        if db_path.exists():
-            available_genres = get_genres_data(db_path)
-            genres_options = ["全て"] + available_genres
-            selected_genre_filter = st.selectbox("ジャンル", genres_options, key="staff_genre")
-        else:
-            selected_genre_filter = st.selectbox("ジャンル", ["全て"], key="staff_genre")
-    
-    # フィルター適用
-    filters = {}
-    if selected_year != "全て":
-        try:
-            filters['seasonYear'] = float(selected_year)
-        except ValueError:
-            pass
-    if selected_season != "全て":
-        filters['season'] = selected_season
-    if selected_source != "全て":
-        filters['source'] = selected_source
-    if selected_format != "全て":
-        filters['format'] = selected_format
-    if selected_genre_filter != "全て":
-        filters['genre'] = selected_genre_filter
-    
-    # フィルター適用（ジャンルフィルターはanilist_idベースで処理）
-    filtered_data = data.copy()
-    
-    # ジャンルフィルターの処理
-    if 'genre' in filters and filters['genre']:
-        try:
-            conn = sqlite3.connect(str(db_path))
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT DISTINCT anilist_id 
-                FROM genres 
-                WHERE genre_name = ?
-            """, (filters['genre'],))
-            genre_anime_ids = [row[0] for row in cursor.fetchall()]
-            conn.close()
-            
-            if genre_anime_ids:
-                filtered_data = filtered_data[filtered_data['anilist_id'].isin(genre_anime_ids)]
-            else:
-                filtered_data = filtered_data.iloc[0:0]
-        except Exception as e:
-            st.error(f"ジャンルフィルター適用エラー: {e}")
-    
-    # その他のフィルター処理
-    for key, value in filters.items():
-        if key != 'genre' and value and key in filtered_data.columns:
-            filtered_data = filtered_data[filtered_data[key] == value]
-    
-    if filtered_data.empty:
-        st.warning("選択された条件に一致するデータがありません。")
-        return
-    
-    # フィルター適用後のデータ件数を取得
-    filtered_count = len(filtered_data)
-    
-    # スタッフIDが重複している場合、アニメのfavoritesが最も多いものだけを残す
-    # まず、staff_idとanilist_idの組み合わせでroleを集約
-    filtered_data['roles'] = filtered_data.groupby(['staff_id', 'anilist_id'])['role'].transform(lambda x: ', '.join(sorted(set(x.dropna()))))
-    
-    # 重複を削除（staff_idとanilist_idの組み合わせで最初の行を保持）
-    filtered_data = filtered_data.drop_duplicates(subset=['staff_id', 'anilist_id'], keep='first')
-    
-    # staff_idごとにアニメfavoritesが最大のものを選択
-    filtered_data = filtered_data.sort_values(['staff_id', 'anime_favorites'], ascending=[True, False]).groupby('staff_id').first().reset_index()
-    
-    # ランキング表示
-    st.subheader(f"📋 ランキング結果 ({filtered_count:,}件）")
-    
-    # データをスタッフのお気に入り数でソート
-    sorted_data = filtered_data.sort_values('staff_favorites', ascending=False).reset_index(drop=True)
-    
-    # 表示用データフレーム準備
-    display_columns = ['staff_name', 'roles', 'title_native', 'seasonYear', 'season', 
-                      'staff_count', 'count_per_year', 'staff_favorites', 'anime_favorites', 'meanScore']
-    available_columns = [col for col in display_columns if col in sorted_data.columns]
-    display_data = sorted_data[available_columns].copy()
-    
-    # カラム名を日本語に変更
-    column_mapping = {
-        'staff_name': 'スタッフ名',
-        'roles': '役割',
-        'title_native': 'アニメタイトル',
-        'seasonYear': '年度',
-        'season': '季節',
-        'staff_count': 'スタッフカウント数',
-        'count_per_year': 'スタッフ年平均カウント数',
-        'staff_favorites': 'スタッフお気に入り数',
-        'anime_favorites': 'アニメお気に入り数',
-        'meanScore': 'アニメ平均スコア'
+    config = {
+        'title': '🎬 スタッフ ランキング',
+        'key_prefix': 'staff',
+        'db_type': 'anime',
+        'dedup_config': {'id_col': 'staff_id', 'sort_col': 'anilist_id', 'sort_by': 'anime_favorites', 'role_aggregate': True},
+        'sort_by': 'staff_favorites',
+        'display_columns': ['staff_name', 'roles', 'title_native', 'seasonYear', 'season', 
+                          'staff_count', 'count_per_year', 'staff_favorites', 'anime_favorites', 'meanScore'],
+        'column_mapping': {
+            'staff_name': 'スタッフ名',
+            'roles': '役割',
+            'title_native': 'アニメタイトル',
+            'seasonYear': '年度',
+            'season': '季節',
+            'staff_count': 'スタッフカウント数',
+            'count_per_year': 'スタッフ年平均カウント数',
+            'staff_favorites': 'スタッフお気に入り数',
+            'anime_favorites': 'アニメお気に入り数',
+            'meanScore': 'アニメ平均スコア'
+        },
+        'chart_config': {
+            'x': 'staff_name',
+            'y': 'staff_favorites',
+            'title': 'トップ10 - スタッフお気に入り数',
+            'labels': {'staff_name': 'スタッフ名', 'staff_favorites': 'お気に入り数'},
+            'hover_data': ['title_native', 'seasonYear', 'season', 'roles']
+        }
     }
-    
-    # 数値フォーマット - 数値型を維持
-    if 'staff_count' in display_data.columns:
-        display_data['staff_count'] = pd.to_numeric(display_data['staff_count'], errors='coerce')
-    if 'count_per_year' in display_data.columns:
-        display_data['count_per_year'] = pd.to_numeric(display_data['count_per_year'], errors='coerce')
-    if 'staff_favorites' in display_data.columns:
-        display_data['staff_favorites'] = pd.to_numeric(display_data['staff_favorites'], errors='coerce')
-    if 'anime_favorites' in display_data.columns:
-        display_data['anime_favorites'] = pd.to_numeric(display_data['anime_favorites'], errors='coerce')
-    if 'meanScore' in display_data.columns:
-        display_data['meanScore'] = pd.to_numeric(display_data['meanScore'], errors='coerce')
-    if 'seasonYear' in display_data.columns:
-        display_data['seasonYear'] = pd.to_numeric(display_data['seasonYear'], errors='coerce')
-    
-    # カラム名を変更
-    display_data = display_data.rename(columns=column_mapping)
-    
-    # インデックスを順位に設定
-    display_data.index = range(1, len(display_data) + 1)
-    display_data.index.name = "順位"
-    
-    # 表示
-    st.dataframe(display_data, width='stretch', height=400)
-    
-    # トップ10のチャート表示
-    if len(sorted_data) >= 1:
-        st.subheader("📊 トップ10チャート")
-        
-        top10_data = sorted_data.head(10)
-        
-        if not top10_data.empty:
-            fig = px.bar(
-                top10_data,
-                x='staff_name',
-                y='staff_favorites',
-                title=f"トップ10 - スタッフお気に入り数",
-                labels={
-                    'staff_name': 'スタッフ名',
-                    'staff_favorites': 'お気に入り数'
-                },
-                hover_data=['title_native', 'seasonYear', 'season', 'roles']
-            )
-            fig.update_xaxes(tickangle=45)
-            fig.update_layout(height=500)
-            st.plotly_chart(fig, width='stretch')
+    show_ranking_template(data, config)
 
 def show_studios_ranking_tab(data):
     """スタジオランキングタブの表示"""
@@ -1680,99 +1051,9 @@ def show_studios_ranking_tab(data):
         st.warning("データが利用できません。")
         return
     
-    # フィルター設定
-    st.subheader("🔧 フィルター設定")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        # 年度選択
-        if 'seasonYear' in data.columns:
-            years = ["全て"] + [str(int(year)) for year in get_unique_values(data, 'seasonYear')]
-            selected_year = st.selectbox("年度", years, key="studios_rank_year")
-        else:
-            selected_year = "全て"
-    
-    with col2:
-        # 季節選択
-        if 'season' in data.columns:
-            seasons = ["全て"] + get_unique_values(data, 'season')
-            selected_season = st.selectbox("季節", seasons, key="studios_rank_season")
-        else:
-            selected_season = "全て"
-    
-    with col3:
-        # 原作選択
-        if 'source' in data.columns:
-            sources = ["全て"] + get_unique_values(data, 'source')
-            selected_source = st.selectbox("原作", sources, key="studios_rank_source")
-        else:
-            selected_source = "全て"
-    
-    # 追加フィルター
-    col4, col5 = st.columns(2)
-    
-    with col4:
-        # フォーマット選択
-        if 'format' in data.columns:
-            formats = ["全て"] + get_unique_values(data, 'format')
-            selected_format = st.selectbox("フォーマット", formats, key="studios_rank_format")
-        else:
-            selected_format = "全て"
-    
-    with col5:
-        # ジャンル選択（データベースから取得）
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-        
-        if db_path.exists():
-            available_genres = get_genres_data(db_path)
-            genres_options = ["全て"] + available_genres
-            selected_genre_filter = st.selectbox("ジャンル", genres_options, key="studios_rank_genre")
-        else:
-            selected_genre_filter = st.selectbox("ジャンル", ["全て"], key="studios_rank_genre")
-    
-    # フィルター適用
-    filters = {}
-    if selected_year != "全て":
-        try:
-            filters['seasonYear'] = float(selected_year)
-        except ValueError:
-            pass
-    if selected_season != "全て":
-        filters['season'] = selected_season
-    if selected_source != "全て":
-        filters['source'] = selected_source
-    if selected_format != "全て":
-        filters['format'] = selected_format
-    if selected_genre_filter != "全て":
-        filters['genre'] = selected_genre_filter
-    
-    # フィルター適用（ジャンルフィルターはanilist_idベースで処理）
-    filtered_data = data.copy()
-    
-    # ジャンルフィルターの処理
-    if 'genre' in filters and filters['genre']:
-        try:
-            conn = sqlite3.connect(str(db_path))
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT DISTINCT anilist_id 
-                FROM genres 
-                WHERE genre_name = ?
-            """, (filters['genre'],))
-            genre_anime_ids = [row[0] for row in cursor.fetchall()]
-            conn.close()
-            
-            if genre_anime_ids:
-                filtered_data = filtered_data[filtered_data['anilist_id'].isin(genre_anime_ids)]
-            else:
-                filtered_data = filtered_data.iloc[0:0]
-        except Exception as e:
-            st.error(f"ジャンルフィルター適用エラー: {e}")
-    
-    # その他のフィルター処理
-    for key, value in filters.items():
-        if key != 'genre' and value and key in filtered_data.columns:
-            filtered_data = filtered_data[filtered_data[key] == value]
+    # フィルター設定（共通化）
+    filters = create_filter_ui(data, "studios_rank", db_type='anime')
+    filtered_data = apply_filters_to_data(data, filters, 'anime')
     
     if filtered_data.empty:
         st.warning("選択された条件に一致するデータがありません。")
@@ -1873,89 +1154,10 @@ def show_source_ranking_tab(data):
         st.warning("データが利用できません。")
         return
     
-    # フィルター設定
-    st.subheader("🔧 フィルター設定")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        # 年度選択
-        if 'seasonYear' in data.columns:
-            years = ["全て"] + [str(int(year)) for year in get_unique_values(data, 'seasonYear')]
-            selected_year = st.selectbox("年度", years, key="source_year")
-        else:
-            selected_year = "全て"
-    
-    with col2:
-        # 季節選択
-        if 'season' in data.columns:
-            seasons = ["全て"] + get_unique_values(data, 'season')
-            selected_season = st.selectbox("季節", seasons, key="source_season")
-        else:
-            selected_season = "全て"
-    
-    with col3:
-        # フォーマット選択
-        if 'format' in data.columns:
-            formats = ["全て"] + get_unique_values(data, 'format')
-            selected_format = st.selectbox("フォーマット", formats, key="source_format")
-        else:
-            selected_format = "全て"
-    
-    # 追加フィルター
-    col4, col5 = st.columns(2)
-    
-    with col4:
-        # ジャンル選択（データベースから取得）
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-        
-        if db_path.exists():
-            available_genres = get_genres_data(db_path)
-            genres_options = ["全て"] + available_genres
-            selected_genre_filter = st.selectbox("ジャンル", genres_options, key="source_genre")
-        else:
-            selected_genre_filter = st.selectbox("ジャンル", ["全て"], key="source_genre")
-    
-    # フィルター適用
-    filters = {}
-    if selected_year != "全て":
-        try:
-            filters['seasonYear'] = float(selected_year)
-        except ValueError:
-            pass
-    if selected_season != "全て":
-        filters['season'] = selected_season
-    if selected_format != "全て":
-        filters['format'] = selected_format
-    if selected_genre_filter != "全て":
-        filters['genre'] = selected_genre_filter
-    
-    # フィルター適用（ジャンルフィルターはanilist_idベースで処理）
-    filtered_data = data.copy()
-    
-    # ジャンルフィルターの処理
-    if 'genre' in filters and filters['genre']:
-        try:
-            conn = sqlite3.connect(str(db_path))
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT DISTINCT anilist_id 
-                FROM genres 
-                WHERE genre_name = ?
-            """, (filters['genre'],))
-            genre_anime_ids = [row[0] for row in cursor.fetchall()]
-            conn.close()
-            
-            if genre_anime_ids:
-                filtered_data = filtered_data[filtered_data['anilist_id'].isin(genre_anime_ids)]
-            else:
-                filtered_data = filtered_data.iloc[0:0]
-        except Exception as e:
-            st.error(f"ジャンルフィルター適用エラー: {e}")
-    
-    # その他のフィルター処理
-    for key, value in filters.items():
-        if key != 'genre' and value and key in filtered_data.columns:
-            filtered_data = filtered_data[filtered_data[key] == value]
+    # フィルター設定（共通化）
+    # sourceランキングではsourceフィルターは不要（データ自体がsource別）
+    filters = create_filter_ui(data, "source", db_type='anime')
+    filtered_data = apply_filters_to_data(data, filters, 'anime')
     
     if filtered_data.empty:
         st.warning("選択された条件に一致するデータがありません。")
@@ -2058,66 +1260,12 @@ def show_genre_ranking_tab(data):
         st.warning("データが利用できません。")
         return
     
-    # フィルター設定
-    st.subheader("🔧 フィルター設定")
-    col1, col2, col3 = st.columns(3)
+    # フィルター設定（共通化）
+    # genreランキングではgenreフィルターは不要（データ自体がgenre別）
+    filters = create_filter_ui(data, "genre", db_type='anime')
     
-    with col1:
-        # 年度選択
-        if 'seasonYear' in data.columns:
-            years = ["全て"] + [str(int(year)) for year in get_unique_values(data, 'seasonYear')]
-            selected_year = st.selectbox("年度", years, key="genre_year")
-        else:
-            selected_year = "全て"
-    
-    with col2:
-        # 季節選択
-        if 'season' in data.columns:
-            seasons = ["全て"] + get_unique_values(data, 'season')
-            selected_season = st.selectbox("季節", seasons, key="genre_season")
-        else:
-            selected_season = "全て"
-    
-    with col3:
-        # フォーマット選択
-        if 'format' in data.columns:
-            formats = ["全て"] + get_unique_values(data, 'format')
-            selected_format = st.selectbox("フォーマット", formats, key="genre_format")
-        else:
-            selected_format = "全て"
-    
-    # 追加フィルター
-    col4, col5 = st.columns(2)
-    
-    with col4:
-        # ジャンル選択（データベースから取得）
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-        
-        if db_path.exists():
-            available_genres = get_genres_data(db_path)
-            genres_options = ["全て"] + available_genres
-            selected_genre_filter = st.selectbox("ジャンル", genres_options, key="genre_genre")
-        else:
-            selected_genre_filter = st.selectbox("ジャンル", ["全て"], key="genre_genre")
-    
-    # フィルター適用
-    filters = {}
-    if selected_year != "全て":
-        try:
-            filters['seasonYear'] = float(selected_year)
-        except ValueError:
-            pass
-    if selected_season != "全て":
-        filters['season'] = selected_season
-    if selected_format != "全て":
-        filters['format'] = selected_format
-    if selected_genre_filter != "全て":
-        filters['genre'] = selected_genre_filter
-    
-    # フィルター適用（ジャンルフィルターはgenre_nameベースで処理）
+    # genreランキングの特殊フィルター適用（genre_nameを直接フィルター）
     filtered_data = data.copy()
-    
-    # ジャンルフィルターの処理
     if 'genre' in filters and filters['genre']:
         filtered_data = filtered_data[filtered_data['genre_name'] == filters['genre']]
     
@@ -2261,99 +1409,9 @@ def show_manga_staff_ranking_tab(data):
         st.warning("データが利用できません。")
         return
     
-    # フィルター設定
-    st.subheader("🔧 フィルター設定")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        # 年度選択
-        if 'seasonYear' in data.columns:
-            years = ["全て"] + [str(int(year)) for year in get_unique_values(data, 'seasonYear')]
-            selected_year = st.selectbox("年度", years, key="manga_staff_year")
-        else:
-            selected_year = "全て"
-    
-    with col2:
-        # 季節選択
-        if 'season' in data.columns:
-            seasons = ["全て"] + get_unique_values(data, 'season')
-            selected_season = st.selectbox("季節", seasons, key="manga_staff_season")
-        else:
-            selected_season = "全て"
-    
-    with col3:
-        # フォーマット選択
-        if 'format' in data.columns:
-            formats = ["全て"] + get_unique_values(data, 'format')
-            selected_format = st.selectbox("フォーマット", formats, key="manga_staff_format")
-        else:
-            selected_format = "全て"
-    
-    # 追加フィルター
-    col4, col5 = st.columns(2)
-    
-    with col4:
-        # 原作選択
-        if 'source' in data.columns:
-            sources = ["全て"] + get_unique_values(data, 'source')
-            selected_source = st.selectbox("原作", sources, key="manga_staff_source")
-        else:
-            selected_source = "全て"
-    
-    with col5:
-        # ジャンルフィルター
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\manga_data.db')
-        if not db_path.exists():
-            current_file = Path(__file__).resolve()
-            project_root = current_file.parent.parent
-            db_path = project_root / 'db' / 'manga_data.db'
-        
-        if db_path.exists():
-            genres = ["全て"] + get_genres_data(db_path)
-            selected_genre_filter = st.selectbox("ジャンル", genres, key="manga_staff_genre")
-        else:
-            selected_genre_filter = "全て"
-    
-    # フィルター適用
-    filters = {}
-    if selected_year != "全て":
-        try:
-            filters['seasonYear'] = int(selected_year)
-        except:
-            pass
-    if selected_season != "全て":
-        filters['season'] = selected_season
-    if selected_source != "全て":
-        filters['source'] = selected_source
-    if selected_format != "全て":
-        filters['format'] = selected_format
-    if selected_genre_filter != "全て":
-        filters['genre'] = selected_genre_filter
-    
-    # フィルター適用（ジャンルフィルターはanilist_idベースで処理）
-    filtered_data = data.copy()
-    
-    # ジャンルフィルターの処理
-    if 'genre' in filters and filters['genre']:
-        try:
-            conn = sqlite3.connect(str(db_path))
-            genre_query = f"""
-                SELECT DISTINCT anilist_id 
-                FROM genres 
-                WHERE genre_name = '{filters['genre']}'
-            """
-            genre_ids = pd.read_sql_query(genre_query, conn)
-            conn.close()
-            
-            if not genre_ids.empty:
-                filtered_data = filtered_data[filtered_data['anilist_id'].isin(genre_ids['anilist_id'])]
-        except Exception as e:
-            st.warning(f"ジャンルフィルター適用エラー: {e}")
-    
-    # その他のフィルター処理
-    for key, value in filters.items():
-        if key != 'genre' and key in filtered_data.columns:
-            filtered_data = filtered_data[filtered_data[key] == value]
+    # フィルター設定（共通化）
+    filters = create_filter_ui(data, "manga_staff", db_type='manga')
+    filtered_data = apply_filters_to_data(data, filters, 'manga')
     
     if filtered_data.empty:
         st.warning("フィルター条件に一致するデータがありません。")
@@ -2465,75 +1523,15 @@ def show_manga_genre_ranking_tab(data):
         st.warning("データが利用できません。")
         return
     
-    # フィルター設定
-    st.subheader("🔧 フィルター設定")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        # 年度選択
-        if 'seasonYear' in data.columns:
-            years = ["全て"] + [str(int(year)) for year in get_unique_values(data, 'seasonYear')]
-            selected_year = st.selectbox("年度", years, key="manga_genre_year")
-        else:
-            selected_year = "全て"
-    
-    with col2:
-        # 季節選択
-        if 'season' in data.columns:
-            seasons = ["全て"] + get_unique_values(data, 'season')
-            selected_season = st.selectbox("季節", seasons, key="manga_genre_season")
-        else:
-            selected_season = "全て"
-    
-    with col3:
-        # フォーマット選択
-        if 'format' in data.columns:
-            formats = ["全て"] + get_unique_values(data, 'format')
-            selected_format = st.selectbox("フォーマット", formats, key="manga_genre_format")
-        else:
-            selected_format = "全て"
-    
-    # 追加フィルター
-    col4, col5 = st.columns(2)
-    
-    with col4:
-        # 原作選択
-        if 'source' in data.columns:
-            sources = ["全て"] + get_unique_values(data, 'source')
-            selected_source = st.selectbox("原作", sources, key="manga_genre_source")
-        else:
-            selected_source = "全て"
-    
-    with col5:
-        # ジャンルフィルター
-        if 'genre_name' in data.columns:
-            genres = ["全て"] + sorted(data['genre_name'].unique().tolist())
-            selected_genre_filter = st.selectbox("ジャンル", genres, key="manga_genre_filter")
-        else:
-            selected_genre_filter = "全て"
-    
-    # フィルター適用
-    filters = {}
-    if selected_year != "全て":
-        try:
-            filters['seasonYear'] = int(selected_year)
-        except:
-            pass
-    if selected_season != "全て":
-        filters['season'] = selected_season
-    if selected_source != "全て":
-        filters['source'] = selected_source
-    if selected_format != "全て":
-        filters['format'] = selected_format
-    if selected_genre_filter != "全て":
-        filters['genre_name'] = selected_genre_filter
+    # フィルター設定（共通化）
+    filters = create_filter_ui(data, "manga_genre", db_type='manga')
     
     # フィルター適用
     filtered_data = data.copy()
     
     # その他のフィルター処理
     for key, value in filters.items():
-        if key in filtered_data.columns:
+        if value and key in filtered_data.columns:
             filtered_data = filtered_data[filtered_data[key] == value]
     
     if filtered_data.empty:
@@ -2669,99 +1667,9 @@ def show_studios_statistics_tab(data):
         st.warning("データが利用できません。")
         return
     
-    # フィルター設定
-    st.subheader("🔧 フィルター設定")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        # 年度選択
-        if 'seasonYear' in data.columns:
-            years = ["全て"] + [str(int(year)) for year in get_unique_values(data, 'seasonYear')]
-            selected_year = st.selectbox("年度", years, key="studios_stats_year")
-        else:
-            selected_year = "全て"
-    
-    with col2:
-        # 季節選択
-        if 'season' in data.columns:
-            seasons = ["全て"] + get_unique_values(data, 'season')
-            selected_season = st.selectbox("季節", seasons, key="studios_stats_season")
-        else:
-            selected_season = "全て"
-    
-    with col3:
-        # 原作選択
-        if 'source' in data.columns:
-            sources = ["全て"] + get_unique_values(data, 'source')
-            selected_source = st.selectbox("原作", sources, key="studios_stats_source")
-        else:
-            selected_source = "全て"
-    
-    # 追加フィルター
-    col4, col5 = st.columns(2)
-    
-    with col4:
-        # フォーマット選択
-        if 'format' in data.columns:
-            formats = ["全て"] + get_unique_values(data, 'format')
-            selected_format = st.selectbox("フォーマット", formats, key="studios_stats_format")
-        else:
-            selected_format = "全て"
-    
-    with col5:
-        # ジャンル選択（データベースから取得）
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-        
-        if db_path.exists():
-            available_genres = get_genres_data(db_path)
-            genres_options = ["全て"] + available_genres
-            selected_genre_filter = st.selectbox("ジャンル", genres_options, key="studios_stats_genre")
-        else:
-            selected_genre_filter = st.selectbox("ジャンル", ["全て"], key="studios_stats_genre")
-    
-    # フィルター適用
-    filters = {}
-    if selected_year != "全て":
-        try:
-            filters['seasonYear'] = float(selected_year)
-        except ValueError:
-            pass
-    if selected_season != "全て":
-        filters['season'] = selected_season
-    if selected_source != "全て":
-        filters['source'] = selected_source
-    if selected_format != "全て":
-        filters['format'] = selected_format
-    if selected_genre_filter != "全て":
-        filters['genre'] = selected_genre_filter
-    
-    # フィルター適用（ジャンルフィルターはanilist_idベースで処理）
-    filtered_data = data.copy()
-    
-    # ジャンルフィルターの処理
-    if 'genre' in filters and filters['genre']:
-        try:
-            conn = sqlite3.connect(str(db_path))
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT DISTINCT anilist_id 
-                FROM genres 
-                WHERE genre_name = ?
-            """, (filters['genre'],))
-            genre_anime_ids = [row[0] for row in cursor.fetchall()]
-            conn.close()
-            
-            if genre_anime_ids:
-                filtered_data = filtered_data[filtered_data['anilist_id'].isin(genre_anime_ids)]
-            else:
-                filtered_data = filtered_data.iloc[0:0]
-        except Exception as e:
-            st.error(f"ジャンルフィルター適用エラー: {e}")
-    
-    # その他のフィルター処理
-    for key, value in filters.items():
-        if key != 'genre' and value and key in filtered_data.columns:
-            filtered_data = filtered_data[filtered_data[key] == value]
+    # フィルター設定（共通化）
+    filters = create_filter_ui(data, "studios_stats", db_type='anime')
+    filtered_data = apply_filters_to_data(data, filters, 'anime')
     
     if filtered_data.empty:
         st.warning("選択された条件に一致するデータがありません。")
@@ -3024,99 +1932,9 @@ def show_voiceactor_statistics_tab(data):
         st.warning("データが利用できません。")
         return
     
-    # フィルター設定
-    st.subheader("🔧 フィルター設定")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        # 年度選択
-        if 'seasonYear' in data.columns:
-            years = ["全て"] + [str(int(year)) for year in get_unique_values(data, 'seasonYear')]
-            selected_year = st.selectbox("年度", years, key="va_stats_year")
-        else:
-            selected_year = "全て"
-    
-    with col2:
-        # 季節選択
-        if 'season' in data.columns:
-            seasons = ["全て"] + get_unique_values(data, 'season')
-            selected_season = st.selectbox("季節", seasons, key="va_stats_season")
-        else:
-            selected_season = "全て"
-    
-    with col3:
-        # 原作選択
-        if 'source' in data.columns:
-            sources = ["全て"] + get_unique_values(data, 'source')
-            selected_source = st.selectbox("原作", sources, key="va_stats_source")
-        else:
-            selected_source = "全て"
-    
-    # 追加フィルター
-    col4, col5 = st.columns(2)
-    
-    with col4:
-        # フォーマット選択
-        if 'format' in data.columns:
-            formats = ["全て"] + get_unique_values(data, 'format')
-            selected_format = st.selectbox("フォーマット", formats, key="va_stats_format")
-        else:
-            selected_format = "全て"
-    
-    with col5:
-        # ジャンル選択（データベースから取得）
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-        
-        if db_path.exists():
-            available_genres = get_genres_data(db_path)
-            genres_options = ["全て"] + available_genres
-            selected_genre_filter = st.selectbox("ジャンル", genres_options, key="va_stats_genre")
-        else:
-            selected_genre_filter = st.selectbox("ジャンル", ["全て"], key="va_stats_genre")
-    
-    # フィルター適用
-    filters = {}
-    if selected_year != "全て":
-        try:
-            filters['seasonYear'] = float(selected_year)
-        except ValueError:
-            pass
-    if selected_season != "全て":
-        filters['season'] = selected_season
-    if selected_source != "全て":
-        filters['source'] = selected_source
-    if selected_format != "全て":
-        filters['format'] = selected_format
-    if selected_genre_filter != "全て":
-        filters['genre'] = selected_genre_filter
-    
-    # フィルター適用（ジャンルフィルターはanilist_idベースで処理）
-    filtered_data = data.copy()
-    
-    # ジャンルフィルターの処理
-    if 'genre' in filters and filters['genre']:
-        try:
-            conn = sqlite3.connect(str(db_path))
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT DISTINCT anilist_id 
-                FROM genres 
-                WHERE genre_name = ?
-            """, (filters['genre'],))
-            genre_anime_ids = [row[0] for row in cursor.fetchall()]
-            conn.close()
-            
-            if genre_anime_ids:
-                filtered_data = filtered_data[filtered_data['anilist_id'].isin(genre_anime_ids)]
-            else:
-                filtered_data = filtered_data.iloc[0:0]
-        except Exception as e:
-            st.error(f"ジャンルフィルター適用エラー: {e}")
-    
-    # その他のフィルター処理
-    for key, value in filters.items():
-        if key != 'genre' and value and key in filtered_data.columns:
-            filtered_data = filtered_data[filtered_data[key] == value]
+    # フィルター設定（共通化）
+    filters = create_filter_ui(data, "va_stats", db_type='anime')
+    filtered_data = apply_filters_to_data(data, filters, 'anime')
     
     if filtered_data.empty:
         st.warning("選択された条件に一致するデータがありません。")
@@ -3233,99 +2051,9 @@ def show_staff_statistics_tab(data):
         st.warning("データが利用できません。")
         return
     
-    # フィルター設定
-    st.subheader("🔧 フィルター設定")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        # 年度選択
-        if 'seasonYear' in data.columns:
-            years = ["全て"] + [str(int(year)) for year in get_unique_values(data, 'seasonYear')]
-            selected_year = st.selectbox("年度", years, key="staff_stats_year")
-        else:
-            selected_year = "全て"
-    
-    with col2:
-        # 季節選択
-        if 'season' in data.columns:
-            seasons = ["全て"] + get_unique_values(data, 'season')
-            selected_season = st.selectbox("季節", seasons, key="staff_stats_season")
-        else:
-            selected_season = "全て"
-    
-    with col3:
-        # 原作選択
-        if 'source' in data.columns:
-            sources = ["全て"] + get_unique_values(data, 'source')
-            selected_source = st.selectbox("原作", sources, key="staff_stats_source")
-        else:
-            selected_source = "全て"
-    
-    # 追加フィルター
-    col4, col5 = st.columns(2)
-    
-    with col4:
-        # フォーマット選択
-        if 'format' in data.columns:
-            formats = ["全て"] + get_unique_values(data, 'format')
-            selected_format = st.selectbox("フォーマット", formats, key="staff_stats_format")
-        else:
-            selected_format = "全て"
-    
-    with col5:
-        # ジャンル選択（データベースから取得）
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-        
-        if db_path.exists():
-            available_genres = get_genres_data(db_path)
-            genres_options = ["全て"] + available_genres
-            selected_genre_filter = st.selectbox("ジャンル", genres_options, key="staff_stats_genre")
-        else:
-            selected_genre_filter = st.selectbox("ジャンル", ["全て"], key="staff_stats_genre")
-    
-    # フィルター適用
-    filters = {}
-    if selected_year != "全て":
-        try:
-            filters['seasonYear'] = float(selected_year)
-        except ValueError:
-            pass
-    if selected_season != "全て":
-        filters['season'] = selected_season
-    if selected_source != "全て":
-        filters['source'] = selected_source
-    if selected_format != "全て":
-        filters['format'] = selected_format
-    if selected_genre_filter != "全て":
-        filters['genre'] = selected_genre_filter
-    
-    # フィルター適用（ジャンルフィルターはanilist_idベースで処理）
-    filtered_data = data.copy()
-    
-    # ジャンルフィルターの処理
-    if 'genre' in filters and filters['genre']:
-        try:
-            conn = sqlite3.connect(str(db_path))
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT DISTINCT anilist_id 
-                FROM genres 
-                WHERE genre_name = ?
-            """, (filters['genre'],))
-            genre_anime_ids = [row[0] for row in cursor.fetchall()]
-            conn.close()
-            
-            if genre_anime_ids:
-                filtered_data = filtered_data[filtered_data['anilist_id'].isin(genre_anime_ids)]
-            else:
-                filtered_data = filtered_data.iloc[0:0]
-        except Exception as e:
-            st.error(f"ジャンルフィルター適用エラー: {e}")
-    
-    # その他のフィルター処理
-    for key, value in filters.items():
-        if key != 'genre' and value and key in filtered_data.columns:
-            filtered_data = filtered_data[filtered_data[key] == value]
+    # フィルター設定（共通化）
+    filters = create_filter_ui(data, "staff_stats", db_type='anime')
+    filtered_data = apply_filters_to_data(data, filters, 'anime')
     
     if filtered_data.empty:
         st.warning("選択された条件に一致するデータがありません。")
@@ -3387,6 +2115,7 @@ def show_staff_statistics_tab(data):
     st.subheader("📋 表2: スタッフ基本統計（staff_basicテーブル）")
     
     try:
+        db_path = get_db_path('anime_data.db')
         conn = sqlite3.connect(str(db_path))
         
         # フィルタリングされたstaff_idのリストを取得
@@ -3469,99 +2198,9 @@ def show_character_statistics_tab(data):
         st.warning("データが利用できません。")
         return
     
-    # フィルター設定
-    st.subheader("🔧 フィルター設定")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        # 年度選択
-        if 'seasonYear' in data.columns:
-            years = ["全て"] + [str(int(year)) for year in get_unique_values(data, 'seasonYear')]
-            selected_year = st.selectbox("年度", years, key="char_stats_year")
-        else:
-            selected_year = "全て"
-    
-    with col2:
-        # 季節選択
-        if 'season' in data.columns:
-            seasons = ["全て"] + get_unique_values(data, 'season')
-            selected_season = st.selectbox("季節", seasons, key="char_stats_season")
-        else:
-            selected_season = "全て"
-    
-    with col3:
-        # 原作選択
-        if 'source' in data.columns:
-            sources = ["全て"] + get_unique_values(data, 'source')
-            selected_source = st.selectbox("原作", sources, key="char_stats_source")
-        else:
-            selected_source = "全て"
-    
-    # 追加フィルター
-    col4, col5 = st.columns(2)
-    
-    with col4:
-        # フォーマット選択
-        if 'format' in data.columns:
-            formats = ["全て"] + get_unique_values(data, 'format')
-            selected_format = st.selectbox("フォーマット", formats, key="char_stats_format")
-        else:
-            selected_format = "全て"
-    
-    with col5:
-        # ジャンル選択（データベースから取得）
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-        
-        if db_path.exists():
-            available_genres = get_genres_data(db_path)
-            genres_options = ["全て"] + available_genres
-            selected_genre_filter = st.selectbox("ジャンル", genres_options, key="char_stats_genre")
-        else:
-            selected_genre_filter = st.selectbox("ジャンル", ["全て"], key="char_stats_genre")
-    
-    # フィルター適用
-    filters = {}
-    if selected_year != "全て":
-        try:
-            filters['seasonYear'] = float(selected_year)
-        except ValueError:
-            pass
-    if selected_season != "全て":
-        filters['season'] = selected_season
-    if selected_source != "全て":
-        filters['source'] = selected_source
-    if selected_format != "全て":
-        filters['format'] = selected_format
-    if selected_genre_filter != "全て":
-        filters['genre'] = selected_genre_filter
-    
-    # フィルター適用（ジャンルフィルターはanilist_idベースで処理）
-    filtered_data = data.copy()
-    
-    # ジャンルフィルターの処理
-    if 'genre' in filters and filters['genre']:
-        try:
-            conn = sqlite3.connect(str(db_path))
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT DISTINCT anilist_id 
-                FROM genres 
-                WHERE genre_name = ?
-            """, (filters['genre'],))
-            genre_anime_ids = [row[0] for row in cursor.fetchall()]
-            conn.close()
-            
-            if genre_anime_ids:
-                filtered_data = filtered_data[filtered_data['anilist_id'].isin(genre_anime_ids)]
-            else:
-                filtered_data = filtered_data.iloc[0:0]
-        except Exception as e:
-            st.error(f"ジャンルフィルター適用エラー: {e}")
-    
-    # その他のフィルター処理
-    for key, value in filters.items():
-        if key != 'genre' and value and key in filtered_data.columns:
-            filtered_data = filtered_data[filtered_data[key] == value]
+    # フィルター設定（共通化）
+    filters = create_filter_ui(data, "char_stats", db_type='anime')
+    filtered_data = apply_filters_to_data(data, filters, 'anime')
     
     if filtered_data.empty:
         st.warning("選択された条件に一致するデータがありません。")

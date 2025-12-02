@@ -9,7 +9,7 @@ from pathlib import Path
 
 # ページ設定
 st.set_page_config(
-    page_title="AniList ランキング分析",
+    page_title="AniList 基礎統計",
     page_icon="📊", 
     layout="wide",
     initial_sidebar_state="expanded"
@@ -100,8 +100,8 @@ def load_character_data():
             SELECT 
                 c.chara_id, c.chara_name, c.favorites as char_favorites,
                 a.anilist_id, a.title_romaji, a.title_native, 
-                a.season, a.seasonYear, a.favorites as anime_favorites, 
-                a.meanScore, a.format, a.source
+                a.season, a.seasonYear, a.favorites, 
+                a.meanScore, a.popularity, a.format, a.source
             FROM characters c
             JOIN anime a ON c.anilist_id = a.anilist_id
             WHERE c.chara_name IS NOT NULL
@@ -144,8 +144,8 @@ def load_voiceactor_data():
             SELECT 
                 v.voiceactor_id, v.voiceactor_name, v.favorites as va_favorites,
                 a.anilist_id, a.title_romaji, a.title_native, 
-                a.season, a.seasonYear, a.favorites as anime_favorites, 
-                a.meanScore, a.format, a.source,
+                a.season, a.seasonYear, a.favorites, 
+                a.meanScore, a.popularity, a.format, a.source,
                 vb.voiceactor_count, vb.count_per_year
             FROM voiceactors v
             JOIN anime a ON v.anilist_id = a.anilist_id
@@ -190,8 +190,8 @@ def load_staff_data():
             SELECT 
                 s.staff_id, s.staff_name, s.role, s.favorites as staff_favorites,
                 a.anilist_id, a.title_romaji, a.title_native, 
-                a.season, a.seasonYear, a.favorites as anime_favorites, 
-                a.meanScore, a.format, a.source,
+                a.season, a.seasonYear, a.favorites, 
+                a.meanScore, a.popularity, a.format, a.source,
                 sb.staff_count, sb.count_per_year
             FROM staff s
             JOIN anime a ON s.anilist_id = a.anilist_id
@@ -286,6 +286,156 @@ def load_studios_data():
         return None
 
 @st.cache_data
+def load_genre_data():
+    """アニメジャンルデータの読み込み"""
+    try:
+        # 絶対パスでデータベースの場所を指定
+        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
+        
+        # バックアップ: 相対パスでも試行
+        if not db_path.exists():
+            current_file = Path(__file__).resolve()
+            project_root = current_file.parent.parent
+            db_path = project_root / 'db' / 'anime_data.db'
+        
+        if not db_path.exists():
+            st.error(f"❌ anime_data.db が見つかりません")
+            st.error(f"確認した場所: {db_path}")
+            return None
+        
+        st.info(f"📂 データベース接続: {db_path}")
+        
+        conn = sqlite3.connect(str(db_path))
+        query = """
+            SELECT 
+                g.genre_name,
+                a.anilist_id, a.title_romaji, a.title_native, 
+                a.season, a.seasonYear, a.favorites, 
+                a.meanScore, a.popularity, a.format, a.source
+            FROM genres g
+            JOIN anime a ON g.anilist_id = a.anilist_id
+            WHERE g.genre_name IS NOT NULL AND a.title_romaji IS NOT NULL
+            ORDER BY a.favorites DESC NULLS LAST
+        """
+        data = pd.read_sql_query(query, conn)
+        conn.close()
+        st.success(f"✅ ジャンルデータ読み込み成功: {len(data):,}件")
+        return data
+        
+    except sqlite3.Error as e:
+        st.error(f"❌ データベースエラー: {e}")
+        return None
+    except Exception as e:
+        st.error(f"❌ 予期しないエラー: {e}")
+        return None
+
+@st.cache_data
+def load_source_data():
+    """アニメ原作データの読み込み"""
+    try:
+        # 絶対パスでデータベースの場所を指定
+        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
+        
+        # バックアップ: 相対パスでも試行
+        if not db_path.exists():
+            current_file = Path(__file__).resolve()
+            project_root = current_file.parent.parent
+            db_path = project_root / 'db' / 'anime_data.db'
+        
+        if not db_path.exists():
+            st.error(f"❌ anime_data.db が見つかりません")
+            st.error(f"確認した場所: {db_path}")
+            return None
+        
+        st.info(f"📂 データベース接続: {db_path}")
+        
+        conn = sqlite3.connect(str(db_path))
+        query = """
+            SELECT 
+                a.source,
+                a.anilist_id, a.title_romaji, a.title_native, 
+                a.season, a.seasonYear, a.favorites, 
+                a.meanScore, a.popularity, a.format
+            FROM anime a
+            WHERE a.source IS NOT NULL AND a.title_romaji IS NOT NULL
+            ORDER BY a.favorites DESC NULLS LAST
+        """
+        data = pd.read_sql_query(query, conn)
+        conn.close()
+        st.success(f"✅ 原作データ読み込み成功: {len(data):,}件")
+        return data
+        
+    except sqlite3.Error as e:
+        st.error(f"❌ データベースエラー: {e}")
+        return None
+    except Exception as e:
+        st.error(f"❌ 予期しないエラー: {e}")
+        return None
+
+@st.cache_data
+def load_studio_data():
+    """アニメスタジオデータの読み込み（ジャンル情報含む）"""
+    try:
+        # 絶対パスでデータベースの場所を指定
+        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
+        
+        # バックアップ: 相対パスでも試行
+        if not db_path.exists():
+            current_file = Path(__file__).resolve()
+            project_root = current_file.parent.parent
+            db_path = project_root / 'db' / 'anime_data.db'
+        
+        if not db_path.exists():
+            st.error(f"❌ anime_data.db が見つかりません")
+            st.error(f"確認した場所: {db_path}")
+            return None
+        
+        st.info(f"📂 データベース接続: {db_path}")
+        
+        conn = sqlite3.connect(str(db_path))
+        
+        # スタジオとアニメの基本情報を取得
+        query_studio = """
+            SELECT 
+                s.studios_name,
+                a.anilist_id, a.title_romaji, a.title_native, 
+                a.season, a.seasonYear, a.favorites, 
+                a.meanScore, a.popularity, a.format, a.source
+            FROM studios s
+            JOIN anime a ON s.anilist_id = a.anilist_id
+            WHERE s.studios_name IS NOT NULL AND a.title_romaji IS NOT NULL
+            ORDER BY a.favorites DESC NULLS LAST
+        """
+        studio_data = pd.read_sql_query(query_studio, conn)
+        
+        # ジャンル情報を取得
+        query_genres = """
+            SELECT anilist_id, genre_name
+            FROM genres
+            WHERE genre_name IS NOT NULL
+        """
+        genres_data = pd.read_sql_query(query_genres, conn)
+        conn.close()
+        
+        # ジャンルを集約（複数ジャンルをカンマ区切りで結合）
+        genres_agg = genres_data.groupby('anilist_id')['genre_name'].apply(lambda x: ', '.join(sorted(set(x)))).reset_index()
+        genres_agg.columns = ['anilist_id', 'genres']
+        
+        # スタジオデータとジャンルをマージ
+        data = studio_data.merge(genres_agg, on='anilist_id', how='left')
+        data['genres'] = data['genres'].fillna('Unknown')
+        
+        st.success(f"✅ スタジオデータ読み込み成功: {len(data):,}件")
+        return data
+        
+    except sqlite3.Error as e:
+        st.error(f"❌ データベースエラー: {e}")
+        return None
+    except Exception as e:
+        st.error(f"❌ 予期しないエラー: {e}")
+        return None
+
+@st.cache_data
 def load_manga_data():
     """マンガデータの読み込み"""
     try:
@@ -309,7 +459,7 @@ def load_manga_data():
         query = """
             SELECT 
                 m.anilist_id, m.title_romaji, m.title_native, m.format,
-                m.status, m.startYear, m.meanScore, m.favorites, m.popularity
+                m.seasonYear, m.meanScore, m.favorites, m.popularity
             FROM manga m
             WHERE m.title_romaji IS NOT NULL
             ORDER BY m.meanScore DESC NULLS LAST
@@ -326,6 +476,163 @@ def load_manga_data():
         st.error(f"❌ 予期しないエラー: {e}")
         return None
 
+@st.cache_data
+def load_manga_genre_data():
+    """マンガジャンルデータの読み込み"""
+    try:
+        # 絶対パスでデータベースの場所を指定
+        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\manga_data.db')
+        
+        # バックアップ: 相対パスでも試行
+        if not db_path.exists():
+            current_file = Path(__file__).resolve()
+            project_root = current_file.parent.parent
+            db_path = project_root / 'db' / 'manga_data.db'
+        
+        if not db_path.exists():
+            st.error(f"❌ manga_data.db が見つかりません")
+            st.error(f"確認した場所: {db_path}")
+            return None
+        
+        st.info(f"📂 データベース接続: {db_path}")
+        
+        conn = sqlite3.connect(str(db_path))
+        query = """
+            SELECT 
+                g.genre_name,
+                m.anilist_id, m.title_romaji, m.title_native, 
+                m.seasonYear, m.favorites, 
+                m.meanScore, m.popularity, m.format
+            FROM genres g
+            JOIN manga m ON g.anilist_id = m.anilist_id
+            WHERE g.genre_name IS NOT NULL AND m.title_romaji IS NOT NULL
+            ORDER BY m.favorites DESC NULLS LAST
+        """
+        data = pd.read_sql_query(query, conn)
+        conn.close()
+        st.success(f"✅ マンガジャンルデータ読み込み成功: {len(data):,}件")
+        return data
+        
+    except sqlite3.Error as e:
+        st.error(f"❌ データベースエラー: {e}")
+        return None
+    except Exception as e:
+        st.error(f"❌ 予期しないエラー: {e}")
+        return None
+
+@st.cache_data
+def load_manga_character_data():
+    """マンガキャラクターデータの読み込み"""
+    try:
+        # 絶対パスでデータベースの場所を指定
+        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\manga_data.db')
+        
+        # バックアップ: 相対パスでも試行
+        if not db_path.exists():
+            current_file = Path(__file__).resolve()
+            project_root = current_file.parent.parent
+            db_path = project_root / 'db' / 'manga_data.db'
+        
+        if not db_path.exists():
+            st.error(f"❌ manga_data.db が見つかりません")
+            st.error(f"確認した場所: {db_path}")
+            return None
+        
+        st.info(f"📂 データベース接続: {db_path}")
+        
+        conn = sqlite3.connect(str(db_path))
+        query = """
+            SELECT 
+                c.chara_id, c.chara_name, c.favorites as char_favorites,
+                m.anilist_id, m.title_romaji, m.title_native, 
+                m.seasonYear, m.favorites, 
+                m.meanScore, m.popularity, m.format, m.source
+            FROM characters c
+            JOIN manga m ON c.anilist_id = m.anilist_id
+            WHERE c.chara_name IS NOT NULL
+            ORDER BY c.favorites DESC NULLS LAST
+        """
+        data = pd.read_sql_query(query, conn)
+        conn.close()
+        st.success(f"✅ マンガキャラクターデータ読み込み成功: {len(data):,}件")
+        return data
+        
+    except sqlite3.Error as e:
+        st.error(f"❌ データベースエラー: {e}")
+        return None
+    except Exception as e:
+        st.error(f"❌ 予期しないエラー: {e}")
+        return None
+
+@st.cache_data
+def load_manga_staff_data():
+    """マンガスタッフデータの読み込み"""
+    try:
+        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\manga_data.db')
+        
+        if not db_path.exists():
+            current_file = Path(__file__).resolve()
+            project_root = current_file.parent.parent
+            db_path = project_root / 'db' / 'manga_data.db'
+        
+        if not db_path.exists():
+            st.error(f"❌ manga_data.db が見つかりません")
+            return None
+        
+        st.info(f"📂 データベース接続: {db_path}")
+        
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
+        
+        # staffテーブル存在確認
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='staff'")
+        if not cursor.fetchone():
+            conn.close()
+            st.warning("⚠️ manga_data.dbにstaffテーブルが存在しません。")
+            return None
+        
+        # staff_basic_enhancedテーブルの存在確認
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='staff_basic_enhanced'")
+        has_enhanced = cursor.fetchone() is not None
+        
+        if has_enhanced:
+            query = """
+                SELECT 
+                    s.staff_id, s.staff_name, s.role,
+                    m.anilist_id, m.title_romaji, m.title_native, 
+                    m.seasonYear, m.favorites as manga_favorites, 
+                    m.meanScore, m.format, m.source,
+                    sbe.favorites as staff_favorites,
+                    sbe.total_count as staff_count,
+                    sbe.count_per_year
+                FROM staff s
+                JOIN manga m ON s.anilist_id = m.anilist_id
+                LEFT JOIN staff_basic_enhanced sbe ON s.staff_id = sbe.staff_id
+                WHERE s.staff_name IS NOT NULL
+                ORDER BY sbe.favorites DESC NULLS LAST
+            """
+        else:
+            query = """
+                SELECT 
+                    s.staff_id, s.staff_name, s.role, s.favorites as staff_favorites,
+                    m.anilist_id, m.title_romaji, m.title_native, 
+                    m.seasonYear, m.favorites as manga_favorites, 
+                    m.meanScore, m.format, m.source
+                FROM staff s
+                JOIN manga m ON s.anilist_id = m.anilist_id
+                WHERE s.staff_name IS NOT NULL
+                ORDER BY s.favorites DESC NULLS LAST
+            """
+        
+        data = pd.read_sql_query(query, conn)
+        conn.close()
+        st.success(f"✅ マンガスタッフデータ読み込み成功: {len(data):,}件")
+        return data
+        
+    except Exception as e:
+        st.error(f"❌ エラー: {e}")
+        return None
+
 def get_unique_values(data, column):
     """指定されたカラムのユニークな値を取得"""
     if column in data.columns:
@@ -336,6 +643,159 @@ def get_unique_values(data, column):
         else:
             return sorted(unique_vals)
     return []
+
+def create_decade_filter(data, selected_decade, year_column='seasonYear'):
+    """年代フィルターを適用してデータを絞り込む
+    
+    Args:
+        data: データフレーム
+        selected_decade: 選択された年代（'全期間', '1900年代', '2000年代', '2010年代', '2020年代'）
+        year_column: 年度を表す列名（'seasonYear' or 'seasonYear'）
+    
+    Returns:
+        フィルター適用後のデータフレーム
+    """
+    if selected_decade == "全期間" or year_column not in data.columns:
+        return data
+    
+    # 年代の範囲を定義
+    decade_ranges = {
+        "1900年代": (1900, 1999),
+        "2000年代": (2000, 2009),
+        "2010年代": (2010, 2019),
+        "2020年代": (2020, 2029)
+    }
+    
+    if selected_decade in decade_ranges:
+        start_year, end_year = decade_ranges[selected_decade]
+        return data[(data[year_column] >= start_year) & (data[year_column] <= end_year)]
+    
+    return data
+
+def calculate_statistics_by_period(data, metric_col='favorites', year_column='seasonYear'):
+    """期間別統計を計算する汎用関数
+    
+    Args:
+        data: データフレーム
+        metric_col: 統計を計算する列名
+        year_column: 年度を表す列名（'seasonYear' or 'seasonYear'）
+    
+    Returns:
+        dict: {
+            'overall': 全期間統計のdict,
+            'period_total': 選択期間合計統計のdict,
+            'yearly': 年別統計のDataFrame,
+            'decade': 年代別統計のDataFrame
+        }
+    """
+    if metric_col not in data.columns or year_column not in data.columns:
+        return None
+    
+    # メトリック列のデータ取得
+    metric_data = data[metric_col].dropna()
+    
+    # 全期間統計（10項目）
+    overall_stats = {
+        '合計': float(metric_data.sum()),
+        'カウント': len(metric_data),
+        '最大': float(metric_data.max()),
+        '最小': float(metric_data.min()),
+        '平均': float(metric_data.mean()),
+        '中央値': float(metric_data.median()),
+        '1/4分位': float(metric_data.quantile(0.25)),
+        '3/4分位': float(metric_data.quantile(0.75))
+    }
+    
+    # 標準偏差と分散（データ数が2以上の場合のみ計算）
+    if len(metric_data) > 1:
+        overall_stats['標準偏差'] = float(metric_data.std())
+        overall_stats['分散'] = float(metric_data.var())
+    else:
+        overall_stats['標準偏差'] = 0.0
+        overall_stats['分散'] = 0.0
+    
+    # 選択期間合計統計（全期間と同じ）
+    period_total_stats = overall_stats.copy()
+    
+    # 年別統計（10項目）
+    yearly_data = []
+    for year in sorted(data[year_column].dropna().unique(), reverse=True):
+        year_data = data[data[year_column] == year]
+        year_metric = year_data[metric_col].dropna()
+        
+        if len(year_metric) == 0:
+            continue
+        
+        year_stats = {
+            '年度': int(year),
+            '合計': float(year_metric.sum()),
+            'カウント': len(year_metric),
+            '最大': float(year_metric.max()),
+            '最小': float(year_metric.min()),
+            '平均': float(year_metric.mean()),
+            '中央値': float(year_metric.median()),
+            '1/4分位': float(year_metric.quantile(0.25)),
+            '3/4分位': float(year_metric.quantile(0.75))
+        }
+        
+        # 標準偏差と分散
+        if len(year_metric) > 1:
+            year_stats['標準偏差'] = float(year_metric.std())
+            year_stats['分散'] = float(year_metric.var())
+        else:
+            year_stats['標準偏差'] = 0.0
+            year_stats['分散'] = 0.0
+        
+        yearly_data.append(year_stats)
+    
+    yearly_df = pd.DataFrame(yearly_data)
+    
+    # 年代別統計（10項目）
+    decade_data = []
+    decade_ranges = {
+        "1900年代": (1900, 1999),
+        "2000年代": (2000, 2009),
+        "2010年代": (2010, 2019),
+        "2020年代": (2020, 2029)
+    }
+    
+    for decade_name, (start_year, end_year) in decade_ranges.items():
+        decade_filtered = data[(data[year_column] >= start_year) & (data[year_column] <= end_year)]
+        decade_metric = decade_filtered[metric_col].dropna()
+        
+        if len(decade_metric) == 0:
+            continue
+        
+        decade_stats = {
+            '年代': decade_name,
+            '合計': float(decade_metric.sum()),
+            'カウント': len(decade_metric),
+            '最大': float(decade_metric.max()),
+            '最小': float(decade_metric.min()),
+            '平均': float(decade_metric.mean()),
+            '中央値': float(decade_metric.median()),
+            '1/4分位': float(decade_metric.quantile(0.25)),
+            '3/4分位': float(decade_metric.quantile(0.75))
+        }
+        
+        # 標準偏差と分散
+        if len(decade_metric) > 1:
+            decade_stats['標準偏差'] = float(decade_metric.std())
+            decade_stats['分散'] = float(decade_metric.var())
+        else:
+            decade_stats['標準偏差'] = 0.0
+            decade_stats['分散'] = 0.0
+        
+        decade_data.append(decade_stats)
+    
+    decade_df = pd.DataFrame(decade_data)
+    
+    return {
+        'overall': overall_stats,
+        'period_total': period_total_stats,
+        'yearly': yearly_df,
+        'decade': decade_df
+    }
 
 def filter_data(data, filters, db_path=None):
     """フィルター条件に基づいてデータを絞り込み"""
@@ -917,9 +1377,9 @@ def show_studios_statistics_tab(data):
         st.info("カウント数データがありません。")
 
 def show_voiceactor_statistics_tab(data):
-    """声優基礎統計タブの表示"""
+    """声優基礎統計タブの表示 - 3つの指標の基礎統計"""
     st.header("📊 声優 基礎統計")
-    st.markdown("**このタブでは選択された条件に基づく声優の基礎統計情報を表示します**")
+    st.markdown("**このタブでは声優のお気に入り数、回数、平均回数の基礎統計を表示します**")
     
     if data is None or data.empty:
         st.warning("データが利用できません。")
@@ -927,624 +1387,340 @@ def show_voiceactor_statistics_tab(data):
     
     # フィルター設定
     st.subheader("🔧 フィルター設定")
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        # 年度選択
-        if 'seasonYear' in data.columns:
-            years = ["全て"] + [str(int(year)) for year in get_unique_values(data, 'seasonYear')]
-            selected_year = st.selectbox("年度", years, key="va_stats_year")
-        else:
-            selected_year = "全て"
+        # 年代選択
+        decade_options = ["全期間", "1900年代", "2000年代", "2010年代", "2020年代"]
+        selected_decade = st.selectbox("年代", decade_options, key="va_stats_decade")
     
     with col2:
-        # 季節選択
-        if 'season' in data.columns:
-            seasons = ["全て"] + get_unique_values(data, 'season')
-            selected_season = st.selectbox("季節", seasons, key="va_stats_season")
-        else:
-            selected_season = "全て"
+        # フォーマット選択
+        format_options = ["全て"] + get_unique_values(data, 'format')
+        selected_format = st.selectbox("フォーマット", format_options, key="va_stats_format")
     
     with col3:
         # 原作選択
-        if 'source' in data.columns:
-            sources = ["全て"] + get_unique_values(data, 'source')
-            selected_source = st.selectbox("原作", sources, key="va_stats_source")
-        else:
-            selected_source = "全て"
-    
-    # 追加フィルター
-    col4, col5 = st.columns(2)
+        source_options = ["全て"] + get_unique_values(data, 'source')
+        selected_source = st.selectbox("原作", source_options, key="va_stats_source")
     
     with col4:
-        # フォーマット選択
-        if 'format' in data.columns:
-            formats = ["全て"] + get_unique_values(data, 'format')
-            selected_format = st.selectbox("フォーマット", formats, key="va_stats_format")
-        else:
-            selected_format = "全て"
-    
-    with col5:
-        # ジャンル選択（データベースから取得）
+        # ジャンル選択
         db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-        
         if db_path.exists():
             available_genres = get_genres_data(db_path)
-            genres_options = ["全て"] + available_genres
-            selected_genre_filter = st.selectbox("ジャンル", genres_options, key="va_stats_genre")
+            genre_options = ["全て"] + available_genres
         else:
-            selected_genre_filter = st.selectbox("ジャンル", ["全て"], key="va_stats_genre")
+            genre_options = ["全て"]
+        selected_genre = st.selectbox("ジャンル", genre_options, key="va_stats_genre")
+    
+    # データ型変換
+    data['va_favorites'] = pd.to_numeric(data['va_favorites'], errors='coerce')
+    data['voiceactor_count'] = pd.to_numeric(data['voiceactor_count'], errors='coerce')
+    data['count_per_year'] = pd.to_numeric(data['count_per_year'], errors='coerce')
+    data['seasonYear'] = pd.to_numeric(data['seasonYear'], errors='coerce')
     
     # フィルター適用
     filters = {}
-    if selected_year != "全て":
-        try:
-            filters['seasonYear'] = float(selected_year)
-        except ValueError:
-            pass
-    if selected_season != "全て":
-        filters['season'] = selected_season
-    if selected_source != "全て":
-        filters['source'] = selected_source
     if selected_format != "全て":
         filters['format'] = selected_format
-    if selected_genre_filter != "全て":
-        filters['genre'] = selected_genre_filter
+    if selected_source != "全て":
+        filters['source'] = selected_source
+    if selected_genre != "全て":
+        filters['genre'] = selected_genre
     
-    # フィルター適用（ジャンルフィルターはanilist_idベースで処理）
-    filtered_data = data.copy()
+    filtered_data = filter_data(data, filters, db_path=db_path)
     
-    # ジャンルフィルターの処理
-    if 'genre' in filters and filters['genre']:
-        try:
-            conn = sqlite3.connect(str(db_path))
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT DISTINCT anilist_id 
-                FROM genres 
-                WHERE genre_name = ?
-            """, (filters['genre'],))
-            genre_anime_ids = [row[0] for row in cursor.fetchall()]
-            conn.close()
-            
-            if genre_anime_ids:
-                filtered_data = filtered_data[filtered_data['anilist_id'].isin(genre_anime_ids)]
-            else:
-                filtered_data = filtered_data.iloc[0:0]
-        except Exception as e:
-            st.error(f"ジャンルフィルター適用エラー: {e}")
-    
-    # その他のフィルター処理
-    for key, value in filters.items():
-        if key != 'genre' and value and key in filtered_data.columns:
-            filtered_data = filtered_data[filtered_data[key] == value]
+    # 年代フィルター適用
+    if selected_decade != "全期間":
+        filtered_data = create_decade_filter(filtered_data, selected_decade, year_column='seasonYear')
     
     if filtered_data.empty:
         st.warning("選択された条件に一致するデータがありません。")
         return
     
-    # 声優IDが重複している場合、アニメのfavoritesが最も多いものだけを残す
-    filtered_data = filtered_data.sort_values(['voiceactor_id', 'anime_favorites'], ascending=[True, False]).groupby('voiceactor_id').first().reset_index()
+    # 声優IDごとに集約（重複削除）
+    va_aggregated = filtered_data.groupby('voiceactor_id').agg({
+        'va_favorites': 'first',
+        'voiceactor_count': 'first',
+        'count_per_year': 'first'
+    }).reset_index()
     
-    # フィルター適用後のデータ件数を取得
-    filtered_count = len(filtered_data)
-    
-    # 統計情報表示
-    st.subheader(f"📈 統計分析結果 ({filtered_count:,}件）")
-    
-    # === 表1: キャラクターfavorites統計 ===
-    st.subheader("📋 表1: 声優のお気に入り数統計")
-    
-    va_favorites_data = filtered_data['va_favorites'].dropna()
-    
-    if len(va_favorites_data) == 0:
-        st.error("選択された条件では声優のお気に入り数のデータが存在しません。")
-    else:
-        try:
-            va_stats = {
-                "合計": float(va_favorites_data.sum()),
-                "カウント": len(va_favorites_data),
-                "最大": float(va_favorites_data.max()),
-                "最小": float(va_favorites_data.min()),
-                "平均": float(va_favorites_data.mean()),
-                "中央値": float(va_favorites_data.median()),
-                "1/4分位": float(va_favorites_data.quantile(0.25)),
-                "3/4分位": float(va_favorites_data.quantile(0.75))
-            }
-            
-            if len(va_favorites_data) > 1:
-                va_stats["標準偏差"] = float(va_favorites_data.std())
-                va_stats["分散"] = float(va_favorites_data.var())
-            else:
-                va_stats["標準偏差"] = "計算できません（データ数不足）"
-                va_stats["分散"] = "計算できません（データ数不足）"
-            
-            va_stats_df = pd.DataFrame(
-                [(key, value) for key, value in va_stats.items()],
-                columns=["統計項目", "声優お気に入り数"]
-            )
-            st.dataframe(va_stats_df, width='stretch', height=400)
-            
-        except Exception as e:
-            st.error(f"統計計算エラー: {e}")
-    
-    # === 表2: アニメfavorites統計 ===
-    st.subheader("📋 表2: アニメお気に入り数統計")
-    
-    anime_favorites_data = filtered_data['anime_favorites'].dropna()
-    
-    if len(anime_favorites_data) == 0:
-        st.error("選択された条件ではアニメのお気に入り数のデータが存在しません。")
-    else:
-        try:
-            anime_fav_stats = {
-                "合計": float(anime_favorites_data.sum()),
-                "カウント": len(anime_favorites_data),
-                "最大": float(anime_favorites_data.max()),
-                "最小": float(anime_favorites_data.min()),
-                "平均": float(anime_favorites_data.mean()),
-                "中央値": float(anime_favorites_data.median()),
-                "1/4分位": float(anime_favorites_data.quantile(0.25)),
-                "3/4分位": float(anime_favorites_data.quantile(0.75))
-            }
-            
-            if len(anime_favorites_data) > 1:
-                anime_fav_stats["標準偏差"] = float(anime_favorites_data.std())
-                anime_fav_stats["分散"] = float(anime_favorites_data.var())
-            else:
-                anime_fav_stats["標準偏差"] = "計算できません（データ数不足）"
-                anime_fav_stats["分散"] = "計算できません（データ数不足）"
-            
-            anime_fav_stats_df = pd.DataFrame(
-                [(key, value) for key, value in anime_fav_stats.items()],
-                columns=["統計項目", "アニメお気に入り数"]
-            )
-            st.dataframe(anime_fav_stats_df, width='stretch', height=400)
-            
-        except Exception as e:
-            st.error(f"統計計算エラー: {e}")
-    
-    # === ヒストグラム: 声優お気に入り数の分布 ===
-    st.subheader("📊 データ分布（ヒストグラム）")
-    if len(va_favorites_data) > 0:
-        # 対数スケールに対応するため、データを対数変換
-        log_data = np.log10(va_favorites_data[va_favorites_data > 0])  # 0より大きい値のみ対数変換
+    # 3つの指標の統計計算
+    def calculate_basic_stats(series):
+        """基礎統計を計算"""
+        series = series.dropna()
+        if len(series) == 0:
+            return {}
         
-        fig_hist = px.histogram(
-            x=log_data,
-            nbins=30,
-            title="声優お気に入り数の分布（対数スケール）",
-            labels={
-                'x': '声優お気に入り数 (log10)',
-                'y': '頻度'
-            }
-        )
-        
-        # y軸を対数スケールに設定
-        fig_hist.update_yaxes(type="log")
-        fig_hist.update_layout(height=400)
-        st.plotly_chart(fig_hist, width='stretch')
-
-def show_staff_statistics_tab(data):
-    """スタッフ基礎統計タブの表示"""
-    st.header("📊 スタッフ 基礎統計")
-    st.markdown("**このタブでは選択された条件に基づくスタッフの基礎統計情報を表示します**")
-    
-    if data is None or data.empty:
-        st.warning("データが利用できません。")
-        return
-    
-    # フィルター設定
-    st.subheader("🔧 フィルター設定")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        # 年度選択
-        if 'seasonYear' in data.columns:
-            years = ["全て"] + [str(int(year)) for year in get_unique_values(data, 'seasonYear')]
-            selected_year = st.selectbox("年度", years, key="staff_stats_year")
-        else:
-            selected_year = "全て"
-    
-    with col2:
-        # 季節選択
-        if 'season' in data.columns:
-            seasons = ["全て"] + get_unique_values(data, 'season')
-            selected_season = st.selectbox("季節", seasons, key="staff_stats_season")
-        else:
-            selected_season = "全て"
-    
-    with col3:
-        # 原作選択
-        if 'source' in data.columns:
-            sources = ["全て"] + get_unique_values(data, 'source')
-            selected_source = st.selectbox("原作", sources, key="staff_stats_source")
-        else:
-            selected_source = "全て"
-    
-    # 追加フィルター
-    col4, col5 = st.columns(2)
-    
-    with col4:
-        # フォーマット選択
-        if 'format' in data.columns:
-            formats = ["全て"] + get_unique_values(data, 'format')
-            selected_format = st.selectbox("フォーマット", formats, key="staff_stats_format")
-        else:
-            selected_format = "全て"
-    
-    with col5:
-        # ジャンル選択（データベースから取得）
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-        
-        if db_path.exists():
-            available_genres = get_genres_data(db_path)
-            genres_options = ["全て"] + available_genres
-            selected_genre_filter = st.selectbox("ジャンル", genres_options, key="staff_stats_genre")
-        else:
-            selected_genre_filter = st.selectbox("ジャンル", ["全て"], key="staff_stats_genre")
-    
-    # フィルター適用
-    filters = {}
-    if selected_year != "全て":
-        try:
-            filters['seasonYear'] = float(selected_year)
-        except ValueError:
-            pass
-    if selected_season != "全て":
-        filters['season'] = selected_season
-    if selected_source != "全て":
-        filters['source'] = selected_source
-    if selected_format != "全て":
-        filters['format'] = selected_format
-    if selected_genre_filter != "全て":
-        filters['genre'] = selected_genre_filter
-    
-    # フィルター適用（ジャンルフィルターはanilist_idベースで処理）
-    filtered_data = data.copy()
-    
-    # ジャンルフィルターの処理
-    if 'genre' in filters and filters['genre']:
-        try:
-            conn = sqlite3.connect(str(db_path))
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT DISTINCT anilist_id 
-                FROM genres 
-                WHERE genre_name = ?
-            """, (filters['genre'],))
-            genre_anime_ids = [row[0] for row in cursor.fetchall()]
-            conn.close()
-            
-            if genre_anime_ids:
-                filtered_data = filtered_data[filtered_data['anilist_id'].isin(genre_anime_ids)]
-            else:
-                filtered_data = filtered_data.iloc[0:0]
-        except Exception as e:
-            st.error(f"ジャンルフィルター適用エラー: {e}")
-    
-    # その他のフィルター処理
-    for key, value in filters.items():
-        if key != 'genre' and value and key in filtered_data.columns:
-            filtered_data = filtered_data[filtered_data[key] == value]
-    
-    if filtered_data.empty:
-        st.warning("選択された条件に一致するデータがありません。")
-        return
-    
-    # スタッフIDが重複している場合、アニメのfavoritesが最も多いものだけを残す
-    # まず、staff_idとanilist_idの組み合わせでroleを集約
-    filtered_data['roles'] = filtered_data.groupby(['staff_id', 'anilist_id'])['role'].transform(lambda x: ', '.join(sorted(set(x.dropna()))))
-    
-    # 重複を削除（staff_idとanilist_idの組み合わせで最初の行を保持）
-    filtered_data = filtered_data.drop_duplicates(subset=['staff_id', 'anilist_id'], keep='first')
-    
-    # staff_idごとにアニメfavoritesが最大のものを選択
-    filtered_data = filtered_data.sort_values(['staff_id', 'anime_favorites'], ascending=[True, False]).groupby('staff_id').first().reset_index()
-    
-    # フィルター適用後のデータ件数を取得
-    filtered_count = len(filtered_data)
-    
-    # 統計情報表示
-    st.subheader(f"📈 統計分析結果 ({filtered_count:,}件）")
-    
-    # === 表1: スタッフfavorites統計 ===
-    st.subheader("📋 表1: スタッフのお気に入り数統計")
-    
-    staff_favorites_data = filtered_data['staff_favorites'].dropna()
-    
-    if len(staff_favorites_data) == 0:
-        st.error("選択された条件ではスタッフのお気に入り数のデータが存在しません。")
-    else:
-        try:
-            staff_stats = {
-                "合計": float(staff_favorites_data.sum()),
-                "カウント": len(staff_favorites_data),
-                "最大": float(staff_favorites_data.max()),
-                "最小": float(staff_favorites_data.min()),
-                "平均": float(staff_favorites_data.mean()),
-                "中央値": float(staff_favorites_data.median()),
-                "1/4分位": float(staff_favorites_data.quantile(0.25)),
-                "3/4分位": float(staff_favorites_data.quantile(0.75))
-            }
-            
-            if len(staff_favorites_data) > 1:
-                staff_stats["標準偏差"] = float(staff_favorites_data.std())
-                staff_stats["分散"] = float(staff_favorites_data.var())
-            else:
-                staff_stats["標準偏差"] = "計算できません（データ数不足）"
-                staff_stats["分散"] = "計算できません（データ数不足）"
-            
-            staff_stats_df = pd.DataFrame(
-                [(key, value) for key, value in staff_stats.items()],
-                columns=["統計項目", "スタッフお気に入り数"]
-            )
-            st.dataframe(staff_stats_df, width='stretch', height=400)
-            
-        except Exception as e:
-            st.error(f"統計計算エラー: {e}")
-    
-    # === 表2: staff_basic テーブルからの統計 ===
-    st.subheader("📋 表2: スタッフ基本統計（staff_basicテーブル）")
-    
-    try:
-        conn = sqlite3.connect(str(db_path))
-        
-        # フィルタリングされたstaff_idのリストを取得
-        staff_ids = filtered_data['staff_id'].unique().tolist()
-        
-        if len(staff_ids) > 0:
-            # staff_basicテーブルからデータを取得
-            placeholders = ','.join(['?'] * len(staff_ids))
-            query = f"""
-                SELECT 
-                    staff_id,
-                    staff_name,
-                    favorites,
-                    staff_count,
-                    first_year,
-                    year_count,
-                    count_per_year
-                FROM staff_basic
-                WHERE staff_id IN ({placeholders})
-            """
-            
-            staff_basic_df = pd.read_sql_query(query, conn, params=staff_ids)
-            
-            if not staff_basic_df.empty:
-                # 各カラムの統計を計算
-                basic_stats = {
-                    "スタッフ数": len(staff_basic_df),
-                    "favorites合計": float(staff_basic_df['favorites'].sum()),
-                    "favorites平均": float(staff_basic_df['favorites'].mean()),
-                    "favorites中央値": float(staff_basic_df['favorites'].median()),
-                    "staff_count合計": float(staff_basic_df['staff_count'].sum()),
-                    "staff_count平均": float(staff_basic_df['staff_count'].mean()),
-                    "最古の年度": int(staff_basic_df['first_year'].min()),
-                    "最新の年度": int(staff_basic_df['first_year'].max()),
-                    "年間平均作品数（平均）": float(staff_basic_df['count_per_year'].mean())
-                }
-                
-                basic_stats_df = pd.DataFrame(
-                    [(key, value) for key, value in basic_stats.items()],
-                    columns=["統計項目", "値"]
-                )
-                st.dataframe(basic_stats_df, width='stretch', height=400)
-            else:
-                st.warning("staff_basicテーブルにデータが見つかりません。")
-        else:
-            st.warning("フィルタリング後のスタッフIDがありません。")
-        
-        conn.close()
-        
-    except Exception as e:
-        st.error(f"staff_basicテーブル読み込みエラー: {e}")
-    
-    # === ヒストグラム: スタッフお気に入り数の分布 ===
-    st.subheader("📊 データ分布（ヒストグラム）")
-    if len(staff_favorites_data) > 0:
-        # 対数スケールに対応するため、データを対数変換
-        log_data = np.log10(staff_favorites_data[staff_favorites_data > 0])  # 0より大きい値のみ対数変換
-        
-        fig_hist = px.histogram(
-            x=log_data,
-            nbins=30,
-            title="スタッフお気に入り数の分布（対数スケール）",
-            labels={
-                'x': 'スタッフお気に入り数 (log10)',
-                'y': '頻度'
-            }
-        )
-        
-        # y軸を対数スケールに設定
-        fig_hist.update_yaxes(type="log")
-        fig_hist.update_layout(height=400)
-        st.plotly_chart(fig_hist, width='stretch')
-
-def show_character_statistics_tab(data):
-    """キャラクター基礎統計タブの表示"""
-    st.header("📊 キャラクター 基礎統計")
-    st.markdown("**このタブでは選択された条件に基づくキャラクターの基礎統計情報を表示します**")
-    
-    if data is None or data.empty:
-        st.warning("データが利用できません。")
-        return
-    
-    # フィルター設定
-    st.subheader("🔧 フィルター設定")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        # 年度選択
-        if 'seasonYear' in data.columns:
-            years = ["全て"] + [str(int(year)) for year in get_unique_values(data, 'seasonYear')]
-            selected_year = st.selectbox("年度", years, key="char_stats_year")
-        else:
-            selected_year = "全て"
-    
-    with col2:
-        # 季節選択
-        if 'season' in data.columns:
-            seasons = ["全て"] + get_unique_values(data, 'season')
-            selected_season = st.selectbox("季節", seasons, key="char_stats_season")
-        else:
-            selected_season = "全て"
-    
-    with col3:
-        # 原作選択
-        if 'source' in data.columns:
-            sources = ["全て"] + get_unique_values(data, 'source')
-            selected_source = st.selectbox("原作", sources, key="char_stats_source")
-        else:
-            selected_source = "全て"
-    
-    # 追加フィルター
-    col4, col5 = st.columns(2)
-    
-    with col4:
-        # フォーマット選択
-        if 'format' in data.columns:
-            formats = ["全て"] + get_unique_values(data, 'format')
-            selected_format = st.selectbox("フォーマット", formats, key="char_stats_format")
-        else:
-            selected_format = "全て"
-    
-    with col5:
-        # ジャンル選択（データベースから取得）
-        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-        
-        if db_path.exists():
-            available_genres = get_genres_data(db_path)
-            genres_options = ["全て"] + available_genres
-            selected_genre_filter = st.selectbox("ジャンル", genres_options, key="char_stats_genre")
-        else:
-            selected_genre_filter = st.selectbox("ジャンル", ["全て"], key="char_stats_genre")
-    
-    # フィルター適用
-    filters = {}
-    if selected_year != "全て":
-        try:
-            filters['seasonYear'] = float(selected_year)
-        except ValueError:
-            pass
-    if selected_season != "全て":
-        filters['season'] = selected_season
-    if selected_source != "全て":
-        filters['source'] = selected_source
-    if selected_format != "全て":
-        filters['format'] = selected_format
-    if selected_genre_filter != "全て":
-        filters['genre'] = selected_genre_filter
-    
-    # フィルター適用（ジャンルフィルターはanilist_idベースで処理）
-    filtered_data = data.copy()
-    
-    # ジャンルフィルターの処理
-    if 'genre' in filters and filters['genre']:
-        try:
-            conn = sqlite3.connect(str(db_path))
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT DISTINCT anilist_id 
-                FROM genres 
-                WHERE genre_name = ?
-            """, (filters['genre'],))
-            genre_anime_ids = [row[0] for row in cursor.fetchall()]
-            conn.close()
-            
-            if genre_anime_ids:
-                filtered_data = filtered_data[filtered_data['anilist_id'].isin(genre_anime_ids)]
-            else:
-                filtered_data = filtered_data.iloc[0:0]
-        except Exception as e:
-            st.error(f"ジャンルフィルター適用エラー: {e}")
-    
-    # その他のフィルター処理
-    for key, value in filters.items():
-        if key != 'genre' and value and key in filtered_data.columns:
-            filtered_data = filtered_data[filtered_data[key] == value]
-    
-    if filtered_data.empty:
-        st.warning("選択された条件に一致するデータがありません。")
-        return
-    
-    # キャラクターIDが重複している場合、最も短いアニメタイトルのものだけを残す
-    filtered_data['title_length'] = filtered_data['title_native'].str.len()
-    filtered_data = filtered_data.sort_values(['chara_id', 'title_length']).groupby('chara_id').first().reset_index()
-    
-    # フィルター適用後のデータ件数を取得
-    filtered_count = len(filtered_data)
-    
-    # 統計情報表示
-    st.subheader(f"📈 統計分析結果 ({filtered_count:,}件）")
-    
-    # キャラクターのお気に入り数データを取得
-    metric_data = filtered_data['char_favorites'].dropna()
-    
-    if len(metric_data) == 0:
-        st.error("選択された条件ではキャラクターのお気に入り数のデータが存在しません。")
-        return
-    
-    # 基礎統計の計算
-    try:
         stats = {
-            "合計": float(metric_data.sum()),
-            "カウント": len(metric_data),
-            "最大": float(metric_data.max()),
-            "最小": float(metric_data.min()),
-            "平均": float(metric_data.mean()),
-            "中央値": float(metric_data.median()),
-            "1/4分位": float(metric_data.quantile(0.25)),
-            "3/4分位": float(metric_data.quantile(0.75))
+            "合計": float(series.sum()),
+            "カウント": int(len(series)),
+            "最大": float(series.max()),
+            "最小": float(series.min()),
+            "平均": float(series.mean()),
+            "中央値": float(series.median()),
+            "1/4分位": float(series.quantile(0.25)),
+            "3/4分位": float(series.quantile(0.75))
         }
         
-        # 標準偏差と分散（計算できない場合の処理）
-        if len(metric_data) > 1:
-            stats["標準偏差"] = float(metric_data.std())
-            stats["分散"] = float(metric_data.var())
+        if len(series) > 1:
+            stats["標準偏差"] = float(series.std())
+            stats["分散"] = float(series.var())
         else:
-            stats["標準偏差"] = "計算できません（データ数不足）"
-            stats["分散"] = "計算できません（データ数不足）"
+            stats["標準偏差"] = 0.0
+            stats["分散"] = 0.0
         
-    except Exception as e:
-        st.error(f"統計計算エラー: {e}")
+        return stats
+    
+    # 統計情報の表示
+    st.subheader(f"📈 声優統計（{len(va_aggregated):,}名）")
+    
+    # 表1: お気に入り数の統計
+    st.markdown("### 📊 表1: お気に入り数の基礎統計")
+    favorites_stats = calculate_basic_stats(va_aggregated['va_favorites'])
+    if favorites_stats:
+        favorites_df = pd.DataFrame(
+            [(key, value) for key, value in favorites_stats.items()],
+            columns=["統計項目", "お気に入り数"]
+        )
+        st.dataframe(favorites_df, use_container_width=True, height=400)
+    else:
+        st.warning("お気に入り数のデータがありません")
+    
+    # 表2: 回数の統計
+    st.markdown("### 📊 表2: 回数の基礎統計")
+    count_stats = calculate_basic_stats(va_aggregated['voiceactor_count'])
+    if count_stats:
+        count_df = pd.DataFrame(
+            [(key, value) for key, value in count_stats.items()],
+            columns=["統計項目", "回数"]
+        )
+        st.dataframe(count_df, use_container_width=True, height=400)
+    else:
+        st.warning("回数のデータがありません")
+    
+    # 表3: 平均回数の統計
+    st.markdown("### 📊 表3: 平均回数の基礎統計")
+    avg_count_stats = calculate_basic_stats(va_aggregated['count_per_year'])
+    if avg_count_stats:
+        avg_count_df = pd.DataFrame(
+            [(key, value) for key, value in avg_count_stats.items()],
+            columns=["統計項目", "平均回数"]
+        )
+        st.dataframe(avg_count_df, use_container_width=True, height=400)
+    else:
+        st.warning("平均回数のデータがありません")
+
+def show_staff_statistics_tab(data):
+    """スタッフ基礎統計タブの表示 - 3つの指標の基礎統計"""
+    st.header("📊 スタッフ 基礎統計")
+    st.markdown("**このタブではスタッフのお気に入り数、回数、平均回数の基礎統計を表示します**")
+    
+    if data is None or data.empty:
+        st.warning("データが利用できません。")
         return
     
-    # 統計表の表示
-    st.subheader("📋 基礎統計表")
-    stats_df = pd.DataFrame(
-        [(key, value) for key, value in stats.items()],
-        columns=["統計項目", "キャラクターお気に入り数"]
-    )
-    st.dataframe(stats_df, width='stretch', height=400)
+    # フィルター設定
+    st.subheader("🔧 フィルター設定")
+    col1, col2, col3, col4, col5 = st.columns(5)
     
-    # 計算できなかった項目の表示
-    non_numeric_stats = {k: v for k, v in stats.items() if not isinstance(v, (int, float))}
-    if non_numeric_stats:
-        st.subheader("⚠️ 計算できない項目")
-        for item, reason in non_numeric_stats.items():
-            st.warning(f"**{item}**: {reason}")
+    with col1:
+        # 役割選択
+        role_options = ["全て"] + get_unique_values(data, 'role')
+        selected_role = st.selectbox("役割", role_options, key="staff_stats_role")
     
-    # ヒストグラム表示
-    st.subheader("📊 データ分布（ヒストグラム）")
-    if len(metric_data) > 0:
-        # 対数スケールに対応するため、データを対数変換
-        log_data = np.log10(metric_data[metric_data > 0])  # 0より大きい値のみ対数変換
+    with col2:
+        # 年代選択
+        decade_options = ["全期間", "1900年代", "2000年代", "2010年代", "2020年代"]
+        selected_decade = st.selectbox("年代", decade_options, key="staff_stats_decade")
+    
+    with col3:
+        # フォーマット選択
+        format_options = ["全て"] + get_unique_values(data, 'format')
+        selected_format = st.selectbox("フォーマット", format_options, key="staff_stats_format")
+    
+    with col4:
+        # 原作選択
+        source_options = ["全て"] + get_unique_values(data, 'source')
+        selected_source = st.selectbox("原作", source_options, key="staff_stats_source")
+    
+    with col5:
+        # ジャンル選択
+        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
+        if db_path.exists():
+            available_genres = get_genres_data(db_path)
+            genre_options = ["全て"] + available_genres
+        else:
+            genre_options = ["全て"]
+        selected_genre = st.selectbox("ジャンル", genre_options, key="staff_stats_genre")
+    
+    # データ型変換
+    data['staff_favorites'] = pd.to_numeric(data['staff_favorites'], errors='coerce')
+    data['staff_count'] = pd.to_numeric(data['staff_count'], errors='coerce')
+    data['count_per_year'] = pd.to_numeric(data['count_per_year'], errors='coerce')
+    data['seasonYear'] = pd.to_numeric(data['seasonYear'], errors='coerce')
+    
+    # フィルター適用
+    filtered_data = data.copy()
+    
+    # 役割フィルター
+    if selected_role != "全て":
+        filtered_data = filtered_data[filtered_data['role'] == selected_role]
+    
+    # その他のフィルター
+    filters = {}
+    if selected_format != "全て":
+        filters['format'] = selected_format
+    if selected_source != "全て":
+        filters['source'] = selected_source
+    if selected_genre != "全て":
+        filters['genre'] = selected_genre
+    
+    filtered_data = filter_data(filtered_data, filters, db_path=db_path)
+    
+    # 年代フィルター適用
+    if selected_decade != "全期間":
+        filtered_data = create_decade_filter(filtered_data, selected_decade, year_column='seasonYear')
+    
+    if filtered_data.empty:
+        st.warning("選択された条件に一致するデータがありません。")
+        return
+    
+    # スタッフIDごとに集約（重複削除）
+    staff_aggregated = filtered_data.groupby('staff_id').agg({
+        'staff_favorites': 'first',
+        'staff_count': 'first',
+        'count_per_year': 'first'
+    }).reset_index()
+    
+    # 3つの指標の統計計算
+    def calculate_basic_stats(series):
+        """基礎統計を計算"""
+        series = series.dropna()
+        if len(series) == 0:
+            return {}
         
-        fig_hist = px.histogram(
-            x=log_data,
-            nbins=30,
-            title="キャラクターお気に入り数の分布（対数スケール）",
-            labels={
-                'x': 'キャラクターお気に入り数 (log10)',
-                'y': '頻度'
-            }
+        stats = {
+            "合計": float(series.sum()),
+            "カウント": int(len(series)),
+            "最大": float(series.max()),
+            "最小": float(series.min()),
+            "平均": float(series.mean()),
+            "中央値": float(series.median()),
+            "1/4分位": float(series.quantile(0.25)),
+            "3/4分位": float(series.quantile(0.75))
+        }
+        
+        if len(series) > 1:
+            stats["標準偏差"] = float(series.std())
+            stats["分散"] = float(series.var())
+        else:
+            stats["標準偏差"] = 0.0
+            stats["分散"] = 0.0
+        
+        return stats
+    
+    # 統計情報の表示
+    st.subheader(f"📈 スタッフ統計（{len(staff_aggregated):,}名）")
+    
+    # 表1: お気に入り数の統計
+    st.markdown("### 📊 表1: お気に入り数の基礎統計")
+    favorites_stats = calculate_basic_stats(staff_aggregated['staff_favorites'])
+    if favorites_stats:
+        favorites_df = pd.DataFrame(
+            [(key, value) for key, value in favorites_stats.items()],
+            columns=["統計項目", "お気に入り数"]
         )
-        
-        # y軸を対数スケールに設定
-        fig_hist.update_yaxes(type="log")
-        fig_hist.update_layout(height=400)
-        st.plotly_chart(fig_hist, width='stretch')
+        st.dataframe(favorites_df, use_container_width=True, height=400)
+    else:
+        st.warning("お気に入り数のデータがありません")
+    
+    # 表2: 回数の統計
+    st.markdown("### 📊 表2: 回数の基礎統計")
+    count_stats = calculate_basic_stats(staff_aggregated['staff_count'])
+    if count_stats:
+        count_df = pd.DataFrame(
+            [(key, value) for key, value in count_stats.items()],
+            columns=["統計項目", "回数"]
+        )
+        st.dataframe(count_df, use_container_width=True, height=400)
+    else:
+        st.warning("回数のデータがありません")
+    
+    # 表3: 平均回数の統計
+    st.markdown("### 📊 表3: 平均回数の基礎統計")
+    avg_count_stats = calculate_basic_stats(staff_aggregated['count_per_year'])
+    if avg_count_stats:
+        avg_count_df = pd.DataFrame(
+            [(key, value) for key, value in avg_count_stats.items()],
+            columns=["統計項目", "平均回数"]
+        )
+        st.dataframe(avg_count_df, use_container_width=True, height=400)
+    else:
+        st.warning("平均回数のデータがありません")
+
+def calculate_basic_stats(series):
+    """基礎統計を計算（グローバルヘルパー関数）"""
+    series = series.dropna()
+    if len(series) == 0:
+        return {}
+    
+    stats = {
+        "合計": float(series.sum()),
+        "カウント": int(len(series)),
+        "最大": float(series.max()),
+        "最小": float(series.min()),
+        "平均": float(series.mean()),
+        "中央値": float(series.median()),
+        "1/4分位": float(series.quantile(0.25)),
+        "3/4分位": float(series.quantile(0.75))
+    }
+    
+    if len(series) > 1:
+        stats["標準偏差"] = float(series.std())
+        stats["分散"] = float(series.var())
+    else:
+        stats["標準偏差"] = 0.0
+        stats["分散"] = 0.0
+    
+    return stats
+
+def show_character_statistics_tab(data):
+    """キャラクター基礎統計タブの表示 - キャラクターお気に入り数のみ"""
+    st.header("📊 キャラクター 基礎統計")
+    st.markdown("**このタブではキャラクターのお気に入り数の全体統計を表示します**")
+    
+    if data is None or data.empty:
+        st.warning("データが利用できません。")
+        return
+    
+    # char_favoritesカラムの確認とデータ型変換
+    if 'char_favorites' not in data.columns:
+        st.error("char_favoritesカラムが見つかりません。")
+        return
+    
+    data['char_favorites'] = pd.to_numeric(data['char_favorites'], errors='coerce')
+    
+    # 統計情報の計算
+    char_favorites_data = data['char_favorites'].dropna()
+    
+    if len(char_favorites_data) == 0:
+        st.warning("キャラクターお気に入り数のデータがありません。")
+        return
+    
+    stats = calculate_basic_stats(char_favorites_data)
+    
+    # 統計情報の表示
+    st.subheader(f"📈 キャラクターお気に入り数の統計（{len(char_favorites_data):,}件）")
+    
+    # 全体統計
+    st.markdown("### 📊 全体統計")
+    overall_stats_df = pd.DataFrame(
+        [(key, value) for key, value in stats.items()],
+        columns=["統計項目", "値"]
+    )
+    st.dataframe(overall_stats_df, use_container_width=True, height=400)
 
 def show_statistics_tab(data, genre):
     """基礎統計タブの表示"""
@@ -1575,82 +1751,23 @@ def show_statistics_tab(data, genre):
         )
     
     with col2:
-        # 年度選択
-        if genre == "アニメ" and 'seasonYear' in data.columns:
-            years = ["全て"] + [str(int(year)) for year in get_unique_values(data, 'seasonYear')]
-            selected_year = st.selectbox("年度", years, key="stats_year")
-        elif genre == "漫画" and 'startYear' in data.columns:
-            years = ["全て"] + [str(int(year)) for year in get_unique_values(data, 'startYear')]
-            selected_year = st.selectbox("年度", years, key="stats_year")
-        else:
-            selected_year = "全て"
+        # 年代選択
+        decades = ["全期間", "1900年代", "2000年代", "2010年代", "2020年代"]
+        selected_decade = st.selectbox("年代", decades, key="stats_decade")
     
     with col3:
-        # 季節選択（アニメのみ）
-        if genre == "アニメ" and 'season' in data.columns:
-            seasons = ["全て"] + get_unique_values(data, 'season')
-            selected_season = st.selectbox("季節", seasons, key="stats_season")
-        else:
-            selected_season = "全て"
-    
-    # 追加フィルター
-    col4, col5, col6 = st.columns(3)
-    
-    with col4:
-        # 原作選択
-        if 'source' in data.columns:
-            sources = ["全て"] + get_unique_values(data, 'source')
-            selected_source = st.selectbox("原作", sources, key="stats_source")
-        else:
-            selected_source = "全て"
-    
-    with col5:
-        # フォーマット選択
+        # フォーマット選択（ユニークな要素から動的生成）
         if 'format' in data.columns:
-            formats = ["全て"] + get_unique_values(data, 'format')
+            unique_formats = sorted(data['format'].dropna().unique())
+            formats = ["全て"] + list(unique_formats)
             selected_format = st.selectbox("フォーマット", formats, key="stats_format")
         else:
             selected_format = "全て"
     
-    with col6:
-        # ジャンル選択（データベースから取得）
-        if genre == "アニメ":
-            # 絶対パスでデータベースの場所を指定
-            db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
-            
-            if db_path.exists():
-                available_genres = get_genres_data(db_path)
-                genres_options = ["全て"] + available_genres
-                selected_genre_filter = st.selectbox("ジャンル", genres_options, key="stats_genre")
-            else:
-                selected_genre_filter = st.selectbox("ジャンル", ["全て"], key="stats_genre")
-        else:
-            # マンガの場合は今後実装予定
-            selected_genre_filter = st.selectbox("ジャンル", ["全て"], key="stats_genre")
-    
     # フィルター適用
     filters = {}
-    if genre == "アニメ":
-        if selected_year != "全て":
-            try:
-                filters['seasonYear'] = float(selected_year)
-            except ValueError:
-                pass
-        if selected_season != "全て":
-            filters['season'] = selected_season
-    elif genre == "漫画":
-        if selected_year != "全て":
-            try:
-                filters['startYear'] = float(selected_year)
-            except ValueError:
-                pass
-    
-    if selected_source != "全て":
-        filters['source'] = selected_source
     if selected_format != "全て":
         filters['format'] = selected_format
-    if selected_genre_filter != "全て":
-        filters['genre'] = selected_genre_filter
     
     # データベースパスを絶対パスで指定
     if genre == "アニメ":
@@ -1658,7 +1775,12 @@ def show_statistics_tab(data, genre):
     else:
         db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\manga_data.db')
     
+    # 通常のフィルター適用
     filtered_data = filter_data(data, filters, db_path if db_path.exists() else None)
+    
+    # 年代フィルター適用（アニメはseasonYear、マンガはseasonYear）
+    year_column = 'seasonYear' 
+    filtered_data = create_decade_filter(filtered_data, selected_decade, year_column)
     
     if filtered_data.empty:
         st.warning("選択された条件に一致するデータがありません。")
@@ -1669,69 +1791,1494 @@ def show_statistics_tab(data, genre):
     
     # 統計情報表示
     st.subheader(f"📈 統計分析結果 ({filtered_count:,}件)")
+    st.markdown(f"**選択年代**: {selected_decade} | **選択フォーマット**: {selected_format}")
     
-    # 選択された指標のデータを取得
-    metric_data = filtered_data[selected_metric].dropna()
+    # 期間別統計を計算
+    stats_result = calculate_statistics_by_period(filtered_data, selected_metric, year_column)
     
-    if len(metric_data) == 0:
+    if stats_result is None:
         st.error(f"選択された条件では{metric_labels.get(selected_metric, selected_metric)}のデータが存在しません。")
         return
     
-    # 基礎統計の計算
-    try:
-        stats = {
-            "合計": float(metric_data.sum()),
-            "カウント": len(metric_data),
-            "最大": float(metric_data.max()),
-            "最小": float(metric_data.min()),
-            "平均": float(metric_data.mean()),
-            "中央値": float(metric_data.median()),
-            "1/4分位": float(metric_data.quantile(0.25)),
-            "3/4分位": float(metric_data.quantile(0.75))
-        }
+    # 1. 全期間の基礎統計表
+    st.markdown("---")
+    st.subheader("📊 表1: 全期間の基礎統計")
+    overall_df = pd.DataFrame(
+        [(key, value) for key, value in stats_result['overall'].items()],
+        columns=["統計項目", "値"]
+    )
+    # 数値型に変換
+    for col in overall_df.columns:
+        if col != "統計項目":
+            overall_df[col] = pd.to_numeric(overall_df[col], errors='ignore')
+    st.dataframe(overall_df, width='stretch', height=300)
+    
+    # 2. 年代別の基礎統計（全期間選択時のみ表示）
+    if selected_decade == "全期間" and not stats_result['decade'].empty:
+        st.markdown("---")
+        st.subheader("📊 表2: 年代別の基礎統計")
+        decade_df = stats_result['decade'].copy()
+        # 数値型に変換
+        for col in decade_df.columns:
+            if col != "年代":
+                decade_df[col] = pd.to_numeric(decade_df[col], errors='ignore')
+        st.dataframe(decade_df, width='stretch', height=300)
         
-        # 標準偏差と分散（計算できない場合の処理）
-        if len(metric_data) > 1:
-            stats["標準偏差"] = float(metric_data.std())
-            stats["分散"] = float(metric_data.var())
-        else:
-            stats["標準偏差"] = "計算できません（データ数不足）"
-            stats["分散"] = "計算できません（データ数不足）"
+        # 年代別推移グラフ
+        st.markdown("---")
+        st.subheader("📈 年代別推移グラフ")
         
-    except Exception as e:
-        st.error(f"統計計算エラー: {e}")
+        # グラフ用データの準備
+        plot_data = decade_df.copy()
+        
+        # 選択指標の推移グラフ
+        fig = go.Figure()
+        
+        # 平均値の推移
+        fig.add_trace(go.Scatter(
+            x=plot_data['年代'],
+            y=plot_data['平均'],
+            mode='lines+markers',
+            name=f'{metric_labels.get(selected_metric, selected_metric)} 平均',
+            line=dict(width=3, color='#1f77b4')
+        ))
+        
+        # カウント数の推移（右軸）
+        fig.add_trace(go.Scatter(
+            x=plot_data['年代'],
+            y=plot_data['カウント'],
+            mode='lines+markers',
+            name='タイトル数',
+            line=dict(width=2, dash='dash', color='#ff7f0e'),
+            yaxis='y2'
+        ))
+        
+        # レイアウト設定（2軸）
+        fig.update_layout(
+            title=f'年代別推移 - {metric_labels.get(selected_metric, selected_metric)}',
+            xaxis=dict(title='年代'),
+            yaxis=dict(
+                title=f'{metric_labels.get(selected_metric, selected_metric)}',
+                side='left'
+            ),
+            yaxis2=dict(
+                title='タイトル数',
+                overlaying='y',
+                side='right'
+            ),
+            height=500,
+            hovermode='x unified',
+            showlegend=True
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # 3. 選択期間の合計統計（全期間以外の場合のみ表示）
+    if selected_decade != "全期間":
+        st.markdown("---")
+        st.subheader(f"📊 表2: {selected_decade}の合計統計")
+        period_df = pd.DataFrame(
+            [(key, value) for key, value in stats_result['period_total'].items()],
+            columns=["統計項目", "値"]
+        )
+        # 数値型に変換
+        for col in period_df.columns:
+            if col != "統計項目":
+                period_df[col] = pd.to_numeric(period_df[col], errors='ignore')
+        st.dataframe(period_df, width='stretch', height=300)
+    
+    # 4. 1年ごとの基礎統計表（全期間以外の場合のみ表示）
+    if selected_decade != "全期間" and not stats_result['yearly'].empty:
+        st.markdown("---")
+        st.subheader("📊 表3: 1年ごとの基礎統計")
+        yearly_df = stats_result['yearly'].copy()
+        # 数値型に変換
+        for col in yearly_df.columns:
+            if col != "年度":
+                yearly_df[col] = pd.to_numeric(yearly_df[col], errors='ignore')
+        st.dataframe(yearly_df, width='stretch', height=400)
+        
+        # 年別推移グラフ
+        st.markdown("---")
+        st.subheader("📈 年別推移グラフ")
+        
+        # グラフ用データの準備（年度を昇順にソート）
+        plot_data = yearly_df.sort_values('年度')
+        
+        # 選択指標の推移グラフ
+        fig = go.Figure()
+        
+        # 平均値の推移
+        fig.add_trace(go.Scatter(
+            x=plot_data['年度'],
+            y=plot_data['平均'],
+            mode='lines+markers',
+            name=f'{metric_labels.get(selected_metric, selected_metric)} 平均',
+            line=dict(width=3, color='#1f77b4')
+        ))
+        
+        # カウント数の推移（右軸）
+        fig.add_trace(go.Scatter(
+            x=plot_data['年度'],
+            y=plot_data['カウント'],
+            mode='lines+markers',
+            name='タイトル数',
+            line=dict(width=2, dash='dash', color='#ff7f0e'),
+            yaxis='y2'
+        ))
+        
+        # レイアウト設定（2軸）
+        fig.update_layout(
+            title=f'{selected_decade}の年別推移 - {metric_labels.get(selected_metric, selected_metric)}',
+            xaxis=dict(title='年度'),
+            yaxis=dict(
+                title=f'{metric_labels.get(selected_metric, selected_metric)}',
+                side='left'
+            ),
+            yaxis2=dict(
+                title='タイトル数',
+                overlaying='y',
+                side='right'
+            ),
+            height=500,
+            hovermode='x unified',
+            showlegend=True
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+
+
+def show_genre_statistics_tab(data):
+    """ジャンル基礎統計タブの表示"""
+    st.header("🎭 ジャンル 基礎統計")
+    st.markdown("**このタブでは全ジャンルの基礎統計情報を一括表示します**")
+    
+    if data is None or data.empty:
+        st.warning("データが利用できません。")
         return
     
-    # 統計表の表示
-    st.subheader("📋 基礎統計表")
-    stats_df = pd.DataFrame(
-        [(key, value) for key, value in stats.items()],
-        columns=["統計項目", metric_labels.get(selected_metric, selected_metric)]
-    )
-    st.dataframe(stats_df, width='stretch', height=400)
+    # フィルター設定
+    st.subheader("🔧 フィルター設定")
+    col1, col2, col3 = st.columns(3)
     
-    # 計算できなかった項目の表示
-    non_numeric_stats = {k: v for k, v in stats.items() if not isinstance(v, (int, float))}
-    if non_numeric_stats:
-        st.subheader("⚠️ 計算できない項目")
-        for item, reason in non_numeric_stats.items():
-            st.warning(f"**{item}**: {reason}")
-    
-    # ヒストグラム表示
-    st.subheader("📊 データ分布（ヒストグラム）")
-    if len(metric_data) > 0:
-        fig_hist = px.histogram(
-            x=metric_data,
-            nbins=30,
-            title=f"{metric_labels.get(selected_metric, selected_metric)} の分布",
-            labels={
-                'x': metric_labels.get(selected_metric, selected_metric),
-                'y': '頻度'
-            }
+    with col1:
+        # 指標選択
+        metric_options = ["meanScore", "favorites", "popularity"]
+        metric_labels = {
+            "meanScore": "平均スコア",
+            "favorites": "お気に入り数", 
+            "popularity": "人気度"
+        }
+        selected_metric = st.selectbox(
+            "指標",
+            metric_options,
+            format_func=lambda x: metric_labels.get(x, x),
+            key="genre_stats_metric"
         )
-        fig_hist.update_layout(height=400)
-        st.plotly_chart(fig_hist, width='stretch')
+    
+    with col2:
+        # 年代選択
+        decades = ["全期間", "1900年代", "2000年代", "2010年代", "2020年代"]
+        selected_decade = st.selectbox("年代", decades, key="genre_stats_decade")
+    
+    with col3:
+        # フォーマット選択（ユニークな要素から動的生成）
+        if 'format' in data.columns:
+            unique_formats = sorted(data['format'].dropna().unique())
+            formats = ["全て"] + list(unique_formats)
+            selected_format = st.selectbox("フォーマット", formats, key="genre_stats_format")
+        else:
+            selected_format = "全て"
+    
+    # フォーマットフィルター適用
+    filtered_data = data.copy()
+    if selected_format != "全て":
+        filtered_data = filtered_data[filtered_data['format'] == selected_format]
+    
+    # 年代フィルター適用
+    filtered_data = create_decade_filter(filtered_data, selected_decade, 'seasonYear')
+    
+    if filtered_data.empty:
+        st.warning("選択された条件に一致するデータがありません。")
+        return
+    
+    # 全ジャンルのユニークリストを取得
+    if 'genre_name' not in filtered_data.columns:
+        st.error("ジャンルデータが利用できません。")
+        return
+    
+    unique_genres = sorted(filtered_data['genre_name'].dropna().unique())
+    
+    # 統計情報表示
+    st.subheader(f"📈 統計分析結果")
+    st.markdown(f"**選択年代**: {selected_decade} | **選択フォーマット**: {selected_format} | **ジャンル数**: {len(unique_genres)}種類")
+    
+    # 各ジャンルの統計を計算
+    genre_stats_list = []
+    
+    for genre in unique_genres:
+        genre_data = filtered_data[filtered_data['genre_name'] == genre].copy()
+        
+        if genre_data.empty:
+            continue
+        
+        # 指標の値を取得
+        metric_values = pd.to_numeric(genre_data[selected_metric], errors='coerce').dropna()
+        
+        if len(metric_values) == 0:
+            continue
+        
+        # 統計を計算
+        stats = {
+            'ジャンル': genre,
+            '合計': metric_values.sum(),
+            'カウント': len(metric_values),
+            '最大': metric_values.max(),
+            '最小': metric_values.min(),
+            '平均': metric_values.mean(),
+            '中央値': metric_values.median(),
+            '1/4分位': metric_values.quantile(0.25),
+            '3/4分位': metric_values.quantile(0.75),
+            '標準偏差': metric_values.std(),
+            '分散': metric_values.var()
+        }
+        genre_stats_list.append(stats)
+    
+    if not genre_stats_list:
+        st.warning("選択された条件に一致する統計データがありません。")
+        return
+    
+    # DataFrameに変換
+    genre_stats_df = pd.DataFrame(genre_stats_list)
+    
+    # 数値型に変換
+    for col in genre_stats_df.columns:
+        if col != "ジャンル":
+            genre_stats_df[col] = pd.to_numeric(genre_stats_df[col], errors='ignore')
+    
+    # 1. 全ジャンルの基礎統計表（平均でソート）
+    st.markdown("---")
+    st.subheader(f"📊 表1: 全ジャンルの基礎統計 ({selected_metric})")
+    sorted_df = genre_stats_df.sort_values('平均', ascending=False)
+    st.dataframe(sorted_df, width='stretch', height=600)
+    
+    # 2. 年代別・年次別の詳細統計（全期間以外の場合）
+    if selected_decade != "全期間":
+        st.markdown("---")
+        st.subheader(f"📊 表2: {selected_decade} - 各年度のジャンル別統計")
+        
+        # 年度ごとにジャンル別統計を計算
+        if 'seasonYear' in filtered_data.columns:
+            # 年度のユニークリストを取得（降順）
+            years = sorted(filtered_data['seasonYear'].dropna().unique(), reverse=True)
+            
+            # 各年度の統計を計算
+            yearly_genre_stats = []
+            
+            for year in years:
+                year_data = filtered_data[filtered_data['seasonYear'] == year]
+                
+                for genre in unique_genres:
+                    genre_year_data = year_data[year_data['genre_name'] == genre]
+                    
+                    if genre_year_data.empty:
+                        continue
+                    
+                    metric_values = pd.to_numeric(genre_year_data[selected_metric], errors='coerce').dropna()
+                    
+                    if len(metric_values) == 0:
+                        continue
+                    
+                    stats = {
+                        '年度': int(year),
+                        'ジャンル': genre,
+                        '合計': metric_values.sum(),
+                        'カウント': len(metric_values),
+                        '最大': metric_values.max(),
+                        '最小': metric_values.min(),
+                        '平均': metric_values.mean(),
+                        '中央値': metric_values.median(),
+                        '1/4分位': metric_values.quantile(0.25),
+                        '3/4分位': metric_values.quantile(0.75),
+                        '標準偏差': metric_values.std(),
+                        '分散': metric_values.var()
+                    }
+                    yearly_genre_stats.append(stats)
+            
+            if yearly_genre_stats:
+                yearly_genre_df = pd.DataFrame(yearly_genre_stats)
+                
+                # 数値型に変換
+                for col in yearly_genre_df.columns:
+                    if col not in ["年度", "ジャンル"]:
+                        yearly_genre_df[col] = pd.to_numeric(yearly_genre_df[col], errors='ignore')
+                
+                st.dataframe(yearly_genre_df, width='stretch', height=600)
+                
+                # 年度別推移グラフ（上位5ジャンルのみ）
+                st.markdown("---")
+                st.subheader(f"📈 年度別推移 - 上位5ジャンル")
+                
+                # 全体で平均が高い上位5ジャンルを取得
+                top_5_genres = sorted_df.head(5)['ジャンル'].tolist()
+                
+                # 上位5ジャンルのデータのみフィルター
+                top_5_data = yearly_genre_df[yearly_genre_df['ジャンル'].isin(top_5_genres)]
+                
+                if not top_5_data.empty:
+                    fig = px.line(
+                        top_5_data,
+                        x='年度',
+                        y='平均',
+                        color='ジャンル',
+                        markers=True,
+                        title=f'{selected_decade} - 上位5ジャンルの年度別推移',
+                        labels={
+                            '年度': '年度',
+                            '平均': metric_labels.get(selected_metric, selected_metric)
+                        }
+                    )
+                    fig.update_layout(height=500, hovermode='x unified')
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # ヒートマップ（年度 x ジャンル）
+                    st.markdown("---")
+                    st.subheader(f"🔥 ヒートマップ - 年度別ジャンル平均値")
+                    
+                    # ピボットテーブル作成
+                    pivot_data = top_5_data.pivot(index='ジャンル', columns='年度', values='平均')
+                    
+                    fig_heatmap = px.imshow(
+                        pivot_data,
+                        labels=dict(x="年度", y="ジャンル", color=metric_labels.get(selected_metric, selected_metric)),
+                        x=pivot_data.columns,
+                        y=pivot_data.index,
+                        color_continuous_scale='RdYlBu_r',
+                        aspect='auto'
+                    )
+                    fig_heatmap.update_layout(height=400)
+                    st.plotly_chart(fig_heatmap, use_container_width=True)
+            else:
+                st.info("選択された年代のデータがありません。")
+    
+    # 3. 上位・下位ジャンルの可視化
+    st.markdown("---")
+    st.subheader("📊 上位・下位ジャンル比較")
+    
+    # 上位10ジャンル
+    top_10 = sorted_df.head(10)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown(f"**上位10ジャンル ({metric_labels.get(selected_metric, selected_metric)})**")
+        fig_top = px.bar(
+            top_10,
+            x='平均',
+            y='ジャンル',
+            orientation='h',
+            text='平均',
+            color='平均',
+            color_continuous_scale='Blues'
+        )
+        fig_top.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+        fig_top.update_layout(
+            height=400,
+            yaxis={'categoryorder': 'total ascending'},
+            showlegend=False
+        )
+        st.plotly_chart(fig_top, use_container_width=True)
+    
+    with col2:
+        # 下位10ジャンル
+        bottom_10 = sorted_df.tail(10)
+        st.markdown(f"**下位10ジャンル ({metric_labels.get(selected_metric, selected_metric)})**")
+        fig_bottom = px.bar(
+            bottom_10,
+            x='平均',
+            y='ジャンル',
+            orientation='h',
+            text='平均',
+            color='平均',
+            color_continuous_scale='Reds'
+        )
+        fig_bottom.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+        fig_bottom.update_layout(
+            height=400,
+            yaxis={'categoryorder': 'total descending'},
+            showlegend=False
+        )
+        st.plotly_chart(fig_bottom, use_container_width=True)
+    
+    # 4. 全ジャンルの平均値分布
+    st.markdown("---")
+    st.subheader("📊 全ジャンルの分布")
+    
+    fig_dist = px.histogram(
+        genre_stats_df,
+        x='平均',
+        nbins=30,
+        title=f'{metric_labels.get(selected_metric, selected_metric)}の分布',
+        labels={'平均': metric_labels.get(selected_metric, selected_metric), 'count': 'ジャンル数'}
+    )
+    fig_dist.update_layout(height=400, showlegend=False)
+    st.plotly_chart(fig_dist, use_container_width=True)
+    
+    # 5. カウント vs 平均の散布図
+    st.markdown("---")
+    st.subheader("📊 タイトル数 vs 平均値")
+    
+    fig_scatter = px.scatter(
+        genre_stats_df,
+        x='カウント',
+        y='平均',
+        text='ジャンル',
+        size='カウント',
+        color='平均',
+        color_continuous_scale='Viridis',
+        labels={
+            'カウント': 'タイトル数',
+            '平均': metric_labels.get(selected_metric, selected_metric)
+        },
+        title=f'ジャンル別タイトル数と{metric_labels.get(selected_metric, selected_metric)}の関係'
+    )
+    fig_scatter.update_traces(textposition='top center')
+    fig_scatter.update_layout(height=500)
+    st.plotly_chart(fig_scatter, use_container_width=True)
 
+
+def show_manga_character_statistics_tab(data):
+    """マンガキャラクター基礎統計タブの表示 - キャラクターお気に入り数のみ"""
+    st.header("📚 マンガキャラクター 基礎統計")
+    st.markdown("**このタブではキャラクターのお気に入り数の全体統計を表示します**")
+    
+    if data is None or data.empty:
+        st.warning("データが利用できません。")
+        return
+    
+    # char_favoritesカラムの確認とデータ型変換
+    if 'char_favorites' not in data.columns:
+        st.error("char_favoritesカラムが見つかりません。")
+        return
+    
+    data['char_favorites'] = pd.to_numeric(data['char_favorites'], errors='coerce')
+    
+    # 統計情報の計算
+    char_favorites_data = data['char_favorites'].dropna()
+    
+    if len(char_favorites_data) == 0:
+        st.warning("キャラクターお気に入り数のデータがありません。")
+        return
+    
+    stats = calculate_basic_stats(char_favorites_data)
+    
+    # 統計情報の表示
+    st.subheader(f"📈 キャラクターお気に入り数の統計（{len(char_favorites_data):,}件）")
+    
+    # 全体統計
+    st.markdown("### 📊 全体統計")
+    overall_stats_df = pd.DataFrame(
+        [(key, value) for key, value in stats.items()],
+        columns=["統計項目", "値"]
+    )
+    st.dataframe(overall_stats_df, use_container_width=True, height=400)
+
+def show_manga_staff_statistics_tab(data):
+    """マンガスタッフ基礎統計タブの表示"""
+    st.header("📚 マンガスタッフ 基礎統計")
+    st.markdown("**このタブではスタッフのお気に入り数、回数、平均回数の基礎統計を表示します**")
+    
+    if data is None or data.empty:
+        st.warning("データが利用できません。")
+        return
+    
+    # フィルター設定
+    st.subheader("🔧 フィルター設定")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        # 役割選択
+        role_options = ["全て"] + sorted(data['role'].dropna().unique().tolist())
+        selected_role = st.selectbox("役割", role_options, key="manga_staff_stats_role")
+    
+    with col2:
+        # 年代選択
+        decade_options = ["全期間", "1900年代", "2000年代", "2010年代", "2020年代"]
+        selected_decade = st.selectbox("年代", decade_options, key="manga_staff_stats_decade")
+    
+    with col3:
+        # フォーマット選択
+        format_options = ["全て"] + get_unique_values(data, 'format')
+        selected_format = st.selectbox("フォーマット", format_options, key="manga_staff_stats_format")
+    
+    with col4:
+        # ジャンル選択
+        db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\manga_data.db')
+        if db_path.exists():
+            try:
+                conn = sqlite3.connect(str(db_path))
+                cursor = conn.cursor()
+                cursor.execute("SELECT DISTINCT genre_name FROM genres ORDER BY genre_name")
+                available_genres = [row[0] for row in cursor.fetchall()]
+                conn.close()
+                genre_options = ["全て"] + available_genres
+            except:
+                genre_options = ["全て"]
+        else:
+            genre_options = ["全て"]
+        selected_genre = st.selectbox("ジャンル", genre_options, key="manga_staff_stats_genre")
+    
+    # データ型変換
+    data['staff_favorites'] = pd.to_numeric(data['staff_favorites'], errors='coerce')
+    data['seasonYear'] = pd.to_numeric(data['seasonYear'], errors='coerce')
+    
+    # staff_count と count_per_year の処理
+    if 'staff_count' in data.columns:
+        data['staff_count'] = pd.to_numeric(data['staff_count'], errors='coerce')
+    if 'count_per_year' in data.columns:
+        data['count_per_year'] = pd.to_numeric(data['count_per_year'], errors='coerce')
+    
+    # フィルター適用
+    filtered_data = data.copy()
+    
+    if selected_role != "全て":
+        filtered_data = filtered_data[filtered_data['role'] == selected_role]
+    
+    if selected_format != "全て":
+        filtered_data = filtered_data[filtered_data['format'] == selected_format]
+    
+    # ジャンルフィルター
+    if selected_genre != "全て":
+        try:
+            conn = sqlite3.connect(str(db_path))
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT DISTINCT anilist_id 
+                FROM genres 
+                WHERE genre_name = ?
+            """, (selected_genre,))
+            genre_manga_ids = [row[0] for row in cursor.fetchall()]
+            conn.close()
+            
+            if genre_manga_ids:
+                filtered_data = filtered_data[filtered_data['anilist_id'].isin(genre_manga_ids)]
+            else:
+                filtered_data = filtered_data.iloc[0:0]
+        except Exception as e:
+            st.error(f"ジャンルフィルター適用エラー: {e}")
+    
+    # 年代フィルター適用
+    if selected_decade != "全期間":
+        filtered_data = create_decade_filter(filtered_data, selected_decade, year_column='seasonYear')
+    
+    if filtered_data.empty:
+        st.warning("選択された条件に一致するデータがありません。")
+        return
+    
+    # スタッフIDでグループ化して集計
+    staff_aggregated = filtered_data.groupby('staff_id').agg({
+        'staff_name': 'first',
+        'staff_favorites': 'first',
+        'staff_count': 'first' if 'staff_count' in filtered_data.columns else lambda x: len(x),
+        'count_per_year': 'first' if 'count_per_year' in filtered_data.columns else lambda x: len(x) / max((filtered_data.loc[x.index, 'seasonYear'].max() - filtered_data.loc[x.index, 'seasonYear'].min() + 1), 1)
+    }).reset_index()
+    
+    # staff_count と count_per_year が存在しない場合の処理
+    if 'staff_count' not in data.columns:
+        # 各スタッフの出演回数を計算
+        staff_counts = filtered_data.groupby('staff_id').size().reset_index(name='staff_count')
+        staff_aggregated = staff_aggregated.merge(staff_counts, on='staff_id', how='left', suffixes=('', '_new'))
+        if 'staff_count_new' in staff_aggregated.columns:
+            staff_aggregated['staff_count'] = staff_aggregated['staff_count_new']
+            staff_aggregated.drop('staff_count_new', axis=1, inplace=True)
+    
+    if 'count_per_year' not in data.columns:
+        # 各スタッフの平均回数を計算
+        def calc_count_per_year(group):
+            years = group['seasonYear'].dropna()
+            if len(years) == 0:
+                return 0
+            year_range = years.max() - years.min() + 1
+            return len(group) / max(year_range, 1)
+        
+        count_per_year_data = filtered_data.groupby('staff_id').apply(calc_count_per_year).reset_index(name='count_per_year')
+        staff_aggregated = staff_aggregated.merge(count_per_year_data, on='staff_id', how='left', suffixes=('', '_new'))
+        if 'count_per_year_new' in staff_aggregated.columns:
+            staff_aggregated['count_per_year'] = staff_aggregated['count_per_year_new']
+            staff_aggregated.drop('count_per_year_new', axis=1, inplace=True)
+    
+    # 3つの指標の統計計算用ヘルパー関数
+    def calculate_basic_stats_for_staff(series):
+        """基礎統計を計算"""
+        series = series.dropna()
+        if len(series) == 0:
+            return {}
+        
+        stats = {
+            "合計": float(series.sum()),
+            "カウント": int(len(series)),
+            "最大": float(series.max()),
+            "最小": float(series.min()),
+            "平均": float(series.mean()),
+            "中央値": float(series.median()),
+            "1/4分位": float(series.quantile(0.25)),
+            "3/4分位": float(series.quantile(0.75))
+        }
+        
+        if len(series) > 1:
+            stats["標準偏差"] = float(series.std())
+            stats["分散"] = float(series.var())
+        else:
+            stats["標準偏差"] = 0.0
+            stats["分散"] = 0.0
+        
+        return stats
+    
+    # 統計情報の表示
+    st.subheader(f"📈 スタッフ統計（{len(staff_aggregated):,}名）")
+    
+    # 3つの指標を行として表示
+    st.markdown("### 📊 基礎統計（全期間）")
+    
+    # 各指標の統計を計算
+    favorites_stats = calculate_basic_stats_for_staff(staff_aggregated['staff_favorites'])
+    count_stats = calculate_basic_stats_for_staff(staff_aggregated['staff_count'])
+    avg_count_stats = calculate_basic_stats_for_staff(staff_aggregated['count_per_year'])
+    
+    # データフレームを作成（行: 指標、列: 統計項目）
+    stats_data = {
+        "指標": ["お気に入り数", "回数", "平均回数"],
+        "合計": [favorites_stats.get("合計", 0), count_stats.get("合計", 0), avg_count_stats.get("合計", 0)],
+        "カウント": [favorites_stats.get("カウント", 0), count_stats.get("カウント", 0), avg_count_stats.get("カウント", 0)],
+        "最大": [favorites_stats.get("最大", 0), count_stats.get("最大", 0), avg_count_stats.get("最大", 0)],
+        "最小": [favorites_stats.get("最小", 0), count_stats.get("最小", 0), avg_count_stats.get("最小", 0)],
+        "平均": [favorites_stats.get("平均", 0), count_stats.get("平均", 0), avg_count_stats.get("平均", 0)],
+        "中央値": [favorites_stats.get("中央値", 0), count_stats.get("中央値", 0), avg_count_stats.get("中央値", 0)],
+        "1/4分位": [favorites_stats.get("1/4分位", 0), count_stats.get("1/4分位", 0), avg_count_stats.get("1/4分位", 0)],
+        "3/4分位": [favorites_stats.get("3/4分位", 0), count_stats.get("3/4分位", 0), avg_count_stats.get("3/4分位", 0)],
+        "標準偏差": [favorites_stats.get("標準偏差", 0), count_stats.get("標準偏差", 0), avg_count_stats.get("標準偏差", 0)],
+        "分散": [favorites_stats.get("分散", 0), count_stats.get("分散", 0), avg_count_stats.get("分散", 0)]
+    }
+    
+    stats_df = pd.DataFrame(stats_data)
+    st.dataframe(stats_df, use_container_width=True, height=150)
+    
+    # 全期間選択時は年代別統計を追加表示
+    if selected_decade == "全期間":
+        st.markdown("### 📅 年代別基礎統計")
+        
+        # 年代を追加
+        def assign_decade(year):
+            if pd.isna(year):
+                return None
+            year = int(year)
+            if year < 2000:
+                return "1900年代"
+            elif year < 2010:
+                return "2000年代"
+            elif year < 2020:
+                return "2010年代"
+            else:
+                return "2020年代"
+        
+        filtered_data['decade'] = filtered_data['seasonYear'].apply(assign_decade)
+        
+        # 年代ごとに統計を計算
+        decade_stats_list = []
+        
+        for decade in ["1900年代", "2000年代", "2010年代", "2020年代"]:
+            decade_data = filtered_data[filtered_data['decade'] == decade]
+            
+            if decade_data.empty:
+                continue
+            
+            # 年代ごとにスタッフIDでグループ化
+            decade_staff_agg = decade_data.groupby('staff_id').agg({
+                'staff_favorites': 'first',
+                'staff_count': 'first' if 'staff_count' in decade_data.columns else lambda x: len(x),
+                'count_per_year': 'first' if 'count_per_year' in decade_data.columns else lambda x: len(x) / max((decade_data.loc[x.index, 'seasonYear'].max() - decade_data.loc[x.index, 'seasonYear'].min() + 1), 1)
+            }).reset_index()
+            
+            # 各指標の統計を計算
+            fav_stats = calculate_basic_stats_for_staff(decade_staff_agg['staff_favorites'])
+            cnt_stats = calculate_basic_stats_for_staff(decade_staff_agg['staff_count'])
+            avg_stats = calculate_basic_stats_for_staff(decade_staff_agg['count_per_year'])
+            
+            # 年代別データを追加
+            for metric, stats in [("お気に入り数", fav_stats), ("回数", cnt_stats), ("平均回数", avg_stats)]:
+                decade_stats_list.append({
+                    "年代": decade,
+                    "指標": metric,
+                    "合計": stats.get("合計", 0),
+                    "カウント": stats.get("カウント", 0),
+                    "最大": stats.get("最大", 0),
+                    "最小": stats.get("最小", 0),
+                    "平均": stats.get("平均", 0),
+                    "中央値": stats.get("中央値", 0),
+                    "1/4分位": stats.get("1/4分位", 0),
+                    "3/4分位": stats.get("3/4分位", 0),
+                    "標準偏差": stats.get("標準偏差", 0),
+                    "分散": stats.get("分散", 0)
+                })
+        
+        if decade_stats_list:
+            decade_stats_df = pd.DataFrame(decade_stats_list)
+            st.dataframe(decade_stats_df, use_container_width=True)
+        else:
+            st.info("年代別統計データがありません")
+
+def show_manga_genre_statistics_tab(data):
+    """マンガジャンル基礎統計タブの表示"""
+    st.header("📚 マンガジャンル 基礎統計")
+    st.markdown("**このタブでは全マンガジャンルの基礎統計情報を一括表示します**")
+    
+    if data is None or data.empty:
+        st.warning("データが利用できません。")
+        return
+    
+    # フィルター設定
+    st.subheader("🔧 フィルター設定")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # 指標選択
+        metric_options = ["meanScore", "favorites", "popularity"]
+        metric_labels = {
+            "meanScore": "平均スコア",
+            "favorites": "お気に入り数", 
+            "popularity": "人気度"
+        }
+        selected_metric = st.selectbox(
+            "指標",
+            metric_options,
+            format_func=lambda x: metric_labels.get(x, x),
+            key="manga_genre_stats_metric"
+        )
+    
+    with col2:
+        # 年代選択
+        decades = ["全期間", "1900年代", "2000年代", "2010年代", "2020年代"]
+        selected_decade = st.selectbox("年代", decades, key="manga_genre_stats_decade")
+    
+    with col3:
+        # フォーマット選択（ユニークな要素から動的生成）
+        if 'format' in data.columns:
+            unique_formats = sorted(data['format'].dropna().unique())
+            formats = ["全て"] + list(unique_formats)
+            selected_format = st.selectbox("フォーマット", formats, key="manga_genre_stats_format")
+        else:
+            selected_format = "全て"
+    
+    # フォーマットフィルター適用
+    filtered_data = data.copy()
+    if selected_format != "全て":
+        filtered_data = filtered_data[filtered_data['format'] == selected_format]
+    
+    # 年代フィルター適用
+    filtered_data = create_decade_filter(filtered_data, selected_decade, 'seasonYear')
+    
+    if filtered_data.empty:
+        st.warning("選択された条件に一致するデータがありません。")
+        return
+    
+    # 全ジャンルのユニークリストを取得
+    if 'genre_name' not in filtered_data.columns:
+        st.error("ジャンルデータが利用できません。")
+        return
+    
+    unique_genres = sorted(filtered_data['genre_name'].dropna().unique())
+    
+    # 統計情報表示
+    st.subheader(f"📈 統計分析結果")
+    st.markdown(f"**選択年代**: {selected_decade} | **選択フォーマット**: {selected_format} | **ジャンル数**: {len(unique_genres)}種類")
+    
+    # 各ジャンルの統計を計算
+    genre_stats_list = []
+    
+    for genre in unique_genres:
+        genre_data = filtered_data[filtered_data['genre_name'] == genre].copy()
+        
+        if genre_data.empty:
+            continue
+        
+        # 指標の値を取得
+        metric_values = pd.to_numeric(genre_data[selected_metric], errors='coerce').dropna()
+        
+        if len(metric_values) == 0:
+            continue
+        
+        # 統計を計算
+        stats = {
+            'ジャンル': genre,
+            '合計': metric_values.sum(),
+            'カウント': len(metric_values),
+            '最大': metric_values.max(),
+            '最小': metric_values.min(),
+            '平均': metric_values.mean(),
+            '中央値': metric_values.median(),
+            '1/4分位': metric_values.quantile(0.25),
+            '3/4分位': metric_values.quantile(0.75),
+            '標準偏差': metric_values.std(),
+            '分散': metric_values.var()
+        }
+        genre_stats_list.append(stats)
+    
+    if not genre_stats_list:
+        st.warning("選択された条件に一致する統計データがありません。")
+        return
+    
+    # DataFrameに変換
+    genre_stats_df = pd.DataFrame(genre_stats_list)
+    
+    # 数値型に変換
+    for col in genre_stats_df.columns:
+        if col != "ジャンル":
+            genre_stats_df[col] = pd.to_numeric(genre_stats_df[col], errors='ignore')
+    
+    # 1. 全ジャンルの基礎統計表（平均でソート）
+    st.markdown("---")
+    st.subheader(f"📊 表1: 全ジャンルの基礎統計 ({selected_metric})")
+    sorted_df = genre_stats_df.sort_values('平均', ascending=False)
+    st.dataframe(sorted_df, width='stretch', height=600)
+    
+    # 2. 年代別・年次別の詳細統計（全期間以外の場合）
+    if selected_decade != "全期間":
+        st.markdown("---")
+        st.subheader(f"📊 表2: {selected_decade} - 各年度のジャンル別統計")
+        
+        # 年度ごとにジャンル別統計を計算
+        if 'seasonYear' in filtered_data.columns:
+            # 年度のユニークリストを取得（降順）
+            years = sorted(filtered_data['seasonYear'].dropna().unique(), reverse=True)
+            
+            # 各年度の統計を計算
+            yearly_genre_stats = []
+            
+            for year in years:
+                year_data = filtered_data[filtered_data['seasonYear'] == year]
+                
+                for genre in unique_genres:
+                    genre_year_data = year_data[year_data['genre_name'] == genre]
+                    
+                    if genre_year_data.empty:
+                        continue
+                    
+                    metric_values = pd.to_numeric(genre_year_data[selected_metric], errors='coerce').dropna()
+                    
+                    if len(metric_values) == 0:
+                        continue
+                    
+                    stats = {
+                        '年度': int(year),
+                        'ジャンル': genre,
+                        '合計': metric_values.sum(),
+                        'カウント': len(metric_values),
+                        '最大': metric_values.max(),
+                        '最小': metric_values.min(),
+                        '平均': metric_values.mean(),
+                        '中央値': metric_values.median(),
+                        '1/4分位': metric_values.quantile(0.25),
+                        '3/4分位': metric_values.quantile(0.75),
+                        '標準偏差': metric_values.std(),
+                        '分散': metric_values.var()
+                    }
+                    yearly_genre_stats.append(stats)
+            
+            if yearly_genre_stats:
+                yearly_genre_df = pd.DataFrame(yearly_genre_stats)
+                
+                # 数値型に変換
+                for col in yearly_genre_df.columns:
+                    if col not in ["年度", "ジャンル"]:
+                        yearly_genre_df[col] = pd.to_numeric(yearly_genre_df[col], errors='ignore')
+                
+                st.dataframe(yearly_genre_df, width='stretch', height=600)
+                
+                # 年度別推移グラフ（上位5ジャンルのみ）
+                st.markdown("---")
+                st.subheader(f"📈 年度別推移 - 上位5ジャンル")
+                
+                # 全体で平均が高い上位5ジャンルを取得
+                top_5_genres = sorted_df.head(5)['ジャンル'].tolist()
+                
+                # 上位5ジャンルのデータのみフィルター
+                top_5_data = yearly_genre_df[yearly_genre_df['ジャンル'].isin(top_5_genres)]
+                
+                if not top_5_data.empty:
+                    fig = px.line(
+                        top_5_data,
+                        x='年度',
+                        y='平均',
+                        color='ジャンル',
+                        markers=True,
+                        title=f'{selected_decade} - 上位5ジャンルの年度別推移',
+                        labels={
+                            '年度': '年度',
+                            '平均': metric_labels.get(selected_metric, selected_metric)
+                        }
+                    )
+                    fig.update_layout(height=500, hovermode='x unified')
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # ヒートマップ（年度 x ジャンル）
+                    st.markdown("---")
+                    st.subheader(f"🔥 ヒートマップ - 年度別ジャンル平均値")
+                    
+                    # ピボットテーブル作成
+                    pivot_data = top_5_data.pivot(index='ジャンル', columns='年度', values='平均')
+                    
+                    fig_heatmap = px.imshow(
+                        pivot_data,
+                        labels=dict(x="年度", y="ジャンル", color=metric_labels.get(selected_metric, selected_metric)),
+                        x=pivot_data.columns,
+                        y=pivot_data.index,
+                        color_continuous_scale='RdYlBu_r',
+                        aspect='auto'
+                    )
+                    fig_heatmap.update_layout(height=400)
+                    st.plotly_chart(fig_heatmap, use_container_width=True)
+            else:
+                st.info("選択された年代のデータがありません。")
+    
+    # 3. 上位・下位ジャンルの可視化
+    st.markdown("---")
+    st.subheader("📊 上位・下位ジャンル比較")
+    
+    # 上位10ジャンル
+    top_10 = sorted_df.head(10)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown(f"**上位10ジャンル ({metric_labels.get(selected_metric, selected_metric)})**")
+        fig_top = px.bar(
+            top_10,
+            x='平均',
+            y='ジャンル',
+            orientation='h',
+            text='平均',
+            color='平均',
+            color_continuous_scale='Blues'
+        )
+        fig_top.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+        fig_top.update_layout(
+            height=400,
+            yaxis={'categoryorder': 'total ascending'},
+            showlegend=False
+        )
+        st.plotly_chart(fig_top, use_container_width=True)
+    
+    with col2:
+        # 下位10ジャンル
+        bottom_10 = sorted_df.tail(10)
+        st.markdown(f"**下位10ジャンル ({metric_labels.get(selected_metric, selected_metric)})**")
+        fig_bottom = px.bar(
+            bottom_10,
+            x='平均',
+            y='ジャンル',
+            orientation='h',
+            text='平均',
+            color='平均',
+            color_continuous_scale='Reds'
+        )
+        fig_bottom.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+        fig_bottom.update_layout(
+            height=400,
+            yaxis={'categoryorder': 'total descending'},
+            showlegend=False
+        )
+        st.plotly_chart(fig_bottom, use_container_width=True)
+    
+    # 4. 全ジャンルの平均値分布
+    st.markdown("---")
+    st.subheader("📊 全ジャンルの分布")
+    
+    fig_dist = px.histogram(
+        genre_stats_df,
+        x='平均',
+        nbins=30,
+        title=f'{metric_labels.get(selected_metric, selected_metric)}の分布',
+        labels={'平均': metric_labels.get(selected_metric, selected_metric), 'count': 'ジャンル数'}
+    )
+    fig_dist.update_layout(height=400, showlegend=False)
+    st.plotly_chart(fig_dist, use_container_width=True)
+    
+    # 5. カウント vs 平均の散布図
+    st.markdown("---")
+    st.subheader("📊 タイトル数 vs 平均値")
+    
+    fig_scatter = px.scatter(
+        genre_stats_df,
+        x='カウント',
+        y='平均',
+        text='ジャンル',
+        size='カウント',
+        color='平均',
+        color_continuous_scale='Viridis',
+        labels={
+            'カウント': 'タイトル数',
+            '平均': metric_labels.get(selected_metric, selected_metric)
+        },
+        title=f'ジャンル別タイトル数と{metric_labels.get(selected_metric, selected_metric)}の関係'
+    )
+    fig_scatter.update_traces(textposition='top center')
+    fig_scatter.update_layout(height=500)
+    st.plotly_chart(fig_scatter, use_container_width=True)
+
+
+def show_source_statistics_tab(data):
+    """アニメ原作基礎統計タブの表示"""
+    st.header("📖 アニメ原作 基礎統計")
+    st.markdown("**このタブでは全原作タイプの基礎統計情報を一括表示します**")
+    
+    if data is None or data.empty:
+        st.warning("データが利用できません。")
+        return
+    
+    # フィルター設定
+    st.subheader("🔧 フィルター設定")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # 指標選択
+        metric_options = ["meanScore", "favorites", "popularity"]
+        metric_labels = {
+            "meanScore": "平均スコア",
+            "favorites": "お気に入り数", 
+            "popularity": "人気度"
+        }
+        selected_metric = st.selectbox(
+            "指標",
+            metric_options,
+            format_func=lambda x: metric_labels.get(x, x),
+            key="source_stats_metric"
+        )
+    
+    with col2:
+        # 年代選択
+        decades = ["全期間", "1900年代", "2000年代", "2010年代", "2020年代"]
+        selected_decade = st.selectbox("年代", decades, key="source_stats_decade")
+    
+    with col3:
+        # フォーマット選択（ユニークな要素から動的生成）
+        if 'format' in data.columns:
+            unique_formats = sorted(data['format'].dropna().unique())
+            formats = ["全て"] + list(unique_formats)
+            selected_format = st.selectbox("フォーマット", formats, key="source_stats_format")
+        else:
+            selected_format = "全て"
+    
+    # フォーマットフィルター適用
+    filtered_data = data.copy()
+    if selected_format != "全て":
+        filtered_data = filtered_data[filtered_data['format'] == selected_format]
+    
+    # 年代フィルター適用
+    filtered_data = create_decade_filter(filtered_data, selected_decade, 'seasonYear')
+    
+    if filtered_data.empty:
+        st.warning("選択された条件に一致するデータがありません。")
+        return
+    
+    # 全原作タイプのユニークリストを取得
+    if 'source' not in filtered_data.columns:
+        st.error("原作データが利用できません。")
+        return
+    
+    unique_sources = sorted(filtered_data['source'].dropna().unique())
+    
+    # 統計情報表示
+    st.subheader(f"📈 統計分析結果")
+    st.markdown(f"**選択年代**: {selected_decade} | **選択フォーマット**: {selected_format} | **原作タイプ数**: {len(unique_sources)}種類")
+    
+    # 各原作タイプの統計を計算
+    source_stats_list = []
+    
+    for source in unique_sources:
+        source_data = filtered_data[filtered_data['source'] == source].copy()
+        
+        if source_data.empty:
+            continue
+        
+        # 指標の値を取得
+        metric_values = pd.to_numeric(source_data[selected_metric], errors='coerce').dropna()
+        
+        if len(metric_values) == 0:
+            continue
+        
+        # 統計を計算
+        stats = {
+            '原作': source,
+            '合計': metric_values.sum(),
+            'カウント': len(metric_values),
+            '最大': metric_values.max(),
+            '最小': metric_values.min(),
+            '平均': metric_values.mean(),
+            '中央値': metric_values.median(),
+            '1/4分位': metric_values.quantile(0.25),
+            '3/4分位': metric_values.quantile(0.75),
+            '標準偏差': metric_values.std(),
+            '分散': metric_values.var()
+        }
+        source_stats_list.append(stats)
+    
+    if not source_stats_list:
+        st.warning("選択された条件に一致する統計データがありません。")
+        return
+    
+    # DataFrameに変換
+    source_stats_df = pd.DataFrame(source_stats_list)
+    
+    # 数値型に変換
+    for col in source_stats_df.columns:
+        if col != "原作":
+            source_stats_df[col] = pd.to_numeric(source_stats_df[col], errors='ignore')
+    
+    # 1. 全原作タイプの基礎統計表（平均でソート）
+    st.markdown("---")
+    st.subheader(f"📊 表1: 全原作タイプの基礎統計 ({selected_metric})")
+    sorted_df = source_stats_df.sort_values('平均', ascending=False)
+    st.dataframe(sorted_df, width='stretch', height=400)
+    
+    # 2. 年代別・年次別の詳細統計（全期間以外の場合）
+    if selected_decade != "全期間":
+        st.markdown("---")
+        st.subheader(f"📊 表2: {selected_decade} - 各年度の原作別統計")
+        
+        # 年度ごとに原作別統計を計算
+        if 'seasonYear' in filtered_data.columns:
+            # 年度のユニークリストを取得（降順）
+            years = sorted(filtered_data['seasonYear'].dropna().unique(), reverse=True)
+            
+            # 各年度の統計を計算
+            yearly_source_stats = []
+            
+            for year in years:
+                year_data = filtered_data[filtered_data['seasonYear'] == year]
+                
+                for source in unique_sources:
+                    source_year_data = year_data[year_data['source'] == source]
+                    
+                    if source_year_data.empty:
+                        continue
+                    
+                    metric_values = pd.to_numeric(source_year_data[selected_metric], errors='coerce').dropna()
+                    
+                    if len(metric_values) == 0:
+                        continue
+                    
+                    stats = {
+                        '年度': int(year),
+                        '原作': source,
+                        '合計': metric_values.sum(),
+                        'カウント': len(metric_values),
+                        '最大': metric_values.max(),
+                        '最小': metric_values.min(),
+                        '平均': metric_values.mean(),
+                        '中央値': metric_values.median(),
+                        '1/4分位': metric_values.quantile(0.25),
+                        '3/4分位': metric_values.quantile(0.75),
+                        '標準偏差': metric_values.std(),
+                        '分散': metric_values.var()
+                    }
+                    yearly_source_stats.append(stats)
+            
+            if yearly_source_stats:
+                yearly_source_df = pd.DataFrame(yearly_source_stats)
+                
+                # 数値型に変換
+                for col in yearly_source_df.columns:
+                    if col not in ["年度", "原作"]:
+                        yearly_source_df[col] = pd.to_numeric(yearly_source_df[col], errors='ignore')
+                
+                st.dataframe(yearly_source_df, width='stretch', height=600)
+                
+                # 年度別推移グラフ（全原作タイプ）
+                st.markdown("---")
+                st.subheader(f"📈 年度別推移 - 全原作タイプ")
+                
+                if not yearly_source_df.empty:
+                    fig = px.line(
+                        yearly_source_df,
+                        x='年度',
+                        y='平均',
+                        color='原作',
+                        markers=True,
+                        title=f'{selected_decade} - 原作別の年度別推移',
+                        labels={
+                            '年度': '年度',
+                            '平均': metric_labels.get(selected_metric, selected_metric)
+                        }
+                    )
+                    fig.update_layout(height=500, hovermode='x unified')
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # ヒートマップ（年度 x 原作）
+                    st.markdown("---")
+                    st.subheader(f"🔥 ヒートマップ - 年度別原作平均値")
+                    
+                    # ピボットテーブル作成
+                    pivot_data = yearly_source_df.pivot(index='原作', columns='年度', values='平均')
+                    
+                    fig_heatmap = px.imshow(
+                        pivot_data,
+                        labels=dict(x="年度", y="原作", color=metric_labels.get(selected_metric, selected_metric)),
+                        x=pivot_data.columns,
+                        y=pivot_data.index,
+                        color_continuous_scale='RdYlBu_r',
+                        aspect='auto'
+                    )
+                    fig_heatmap.update_layout(height=400)
+                    st.plotly_chart(fig_heatmap, use_container_width=True)
+            else:
+                st.info("選択された年代のデータがありません。")
+    
+    # 3. 全期間選択時の年代別統計
+    if selected_decade == "全期間":
+        st.markdown("---")
+        st.subheader("📊 表2: 年代別の原作別統計")
+        
+        # 年代定義
+        decade_ranges = {
+            "1900年代": (1900, 1999),
+            "2000年代": (2000, 2009),
+            "2010年代": (2010, 2019),
+            "2020年代": (2020, 2029)
+        }
+        
+        decade_source_stats = []
+        
+        for decade_name, (start_year, end_year) in decade_ranges.items():
+            decade_data = filtered_data[
+                (filtered_data['seasonYear'] >= start_year) & 
+                (filtered_data['seasonYear'] <= end_year)
+            ]
+            
+            if decade_data.empty:
+                continue
+            
+            for source in unique_sources:
+                source_decade_data = decade_data[decade_data['source'] == source]
+                
+                if source_decade_data.empty:
+                    continue
+                
+                metric_values = pd.to_numeric(source_decade_data[selected_metric], errors='coerce').dropna()
+                
+                if len(metric_values) == 0:
+                    continue
+                
+                stats = {
+                    '年代': decade_name,
+                    '原作': source,
+                    '合計': metric_values.sum(),
+                    'カウント': len(metric_values),
+                    '最大': metric_values.max(),
+                    '最小': metric_values.min(),
+                    '平均': metric_values.mean(),
+                    '中央値': metric_values.median(),
+                    '1/4分位': metric_values.quantile(0.25),
+                    '3/4分位': metric_values.quantile(0.75),
+                    '標準偏差': metric_values.std(),
+                    '分散': metric_values.var()
+                }
+                decade_source_stats.append(stats)
+        
+        if decade_source_stats:
+            decade_source_df = pd.DataFrame(decade_source_stats)
+            
+            # 数値型に変換
+            for col in decade_source_df.columns:
+                if col not in ["年代", "原作"]:
+                    decade_source_df[col] = pd.to_numeric(decade_source_df[col], errors='ignore')
+            
+            st.dataframe(decade_source_df, width='stretch', height=600)
+            
+            # 年代別推移グラフ
+            st.markdown("---")
+            st.subheader("📈 年代別推移 - 全原作タイプ")
+            
+            fig_decade = px.line(
+                decade_source_df,
+                x='年代',
+                y='平均',
+                color='原作',
+                markers=True,
+                title=f'年代別原作タイプ別推移',
+                labels={
+                    '年代': '年代',
+                    '平均': metric_labels.get(selected_metric, selected_metric)
+                }
+            )
+            fig_decade.update_layout(height=500, hovermode='x unified')
+            st.plotly_chart(fig_decade, use_container_width=True)
+        else:
+            st.info("年代別のデータがありません。")
+    
+    # 4. 原作タイプ比較の横棒グラフ
+    st.markdown("---")
+    st.subheader("📊 原作タイプ別比較")
+    
+    fig_bar = px.bar(
+        sorted_df,
+        x='平均',
+        y='原作',
+        orientation='h',
+        text='平均',
+        color='平均',
+        color_continuous_scale='Viridis',
+        title=f'原作タイプ別 {metric_labels.get(selected_metric, selected_metric)} 平均値'
+    )
+    fig_bar.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+    fig_bar.update_layout(
+        height=400,
+        yaxis={'categoryorder': 'total ascending'},
+        showlegend=False
+    )
+    st.plotly_chart(fig_bar, use_container_width=True)
+    
+    # 5. カウント vs 平均の散布図
+    st.markdown("---")
+    st.subheader("📊 タイトル数 vs 平均値")
+    
+    fig_scatter = px.scatter(
+        source_stats_df,
+        x='カウント',
+        y='平均',
+        text='原作',
+        size='カウント',
+        color='平均',
+        color_continuous_scale='Viridis',
+        labels={
+            'カウント': 'タイトル数',
+            '平均': metric_labels.get(selected_metric, selected_metric)
+        },
+        title=f'原作別タイトル数と{metric_labels.get(selected_metric, selected_metric)}の関係'
+    )
+    fig_scatter.update_traces(textposition='top center')
+    fig_scatter.update_layout(height=500)
+    st.plotly_chart(fig_scatter, use_container_width=True)
+
+
+def show_studio_statistics_tab(data):
+    """アニメスタジオ基礎統計タブの表示 - スタジオの回数の基礎統計"""
+    st.header("🎬 アニメスタジオ 基礎統計")
+    st.markdown("**このタブではスタジオの回数（作品数）の基礎統計を表示します**")
+    
+    if data is None or data.empty:
+        st.warning("データが利用できません。")
+        return
+    
+    # フィルター設定
+    st.subheader("🔧 フィルター設定")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        # 年代選択
+        decades = ["全期間", "1900年代", "2000年代", "2010年代", "2020年代"]
+        selected_decade = st.selectbox("年代", decades, key="studio_stats_decade")
+    
+    with col2:
+        # フォーマット選択
+        if 'format' in data.columns:
+            unique_formats = sorted(data['format'].dropna().unique())
+            formats = ["全て"] + list(unique_formats)
+            selected_format = st.selectbox("フォーマット", formats, key="studio_stats_format")
+        else:
+            selected_format = "全て"
+    
+    with col3:
+        # 原作選択
+        if 'source' in data.columns:
+            unique_sources = sorted(data['source'].dropna().unique())
+            sources = ["全て"] + list(unique_sources)
+            selected_source = st.selectbox("原作", sources, key="studio_stats_source")
+        else:
+            selected_source = "全て"
+    
+    with col4:
+        # ジャンル選択（複数ジャンルを持つ作品があるため、単一ジャンルでフィルタ）
+        if 'genres' in data.columns:
+            # 全ジャンルを抽出
+            all_genres = set()
+            for genres_str in data['genres'].dropna():
+                if genres_str != 'Unknown':
+                    all_genres.update([g.strip() for g in genres_str.split(',')])
+            unique_genres = sorted(list(all_genres))
+            genres = ["全て"] + unique_genres
+            selected_genre = st.selectbox("ジャンル", genres, key="studio_stats_genre")
+        else:
+            selected_genre = "全て"
+    
+    # フィルター適用
+    filtered_data = data.copy()
+    
+    if selected_format != "全て":
+        filtered_data = filtered_data[filtered_data['format'] == selected_format]
+    
+    if selected_source != "全て":
+        filtered_data = filtered_data[filtered_data['source'] == selected_source]
+    
+    if selected_genre != "全て":
+        # ジャンルが含まれている作品をフィルタ
+        filtered_data = filtered_data[filtered_data['genres'].str.contains(selected_genre, na=False)]
+    
+    # 年代フィルター適用
+    filtered_data = create_decade_filter(filtered_data, selected_decade, 'seasonYear')
+    
+    if filtered_data.empty:
+        st.warning("選択された条件に一致するデータがありません。")
+        return
+    
+    # スタジオごとの作品数を集計
+    if 'studios_name' not in filtered_data.columns:
+        st.error("スタジオデータが利用できません。")
+        return
+    
+    # 各スタジオの作品数をカウント
+    studio_counts = filtered_data.groupby('studios_name').size().reset_index(name='作品数')
+    
+    # 基礎統計を計算
+    def calculate_basic_stats(series):
+        """基礎統計を計算"""
+        series = series.dropna()
+        if len(series) == 0:
+            return {}
+        
+        stats = {
+            "合計": float(series.sum()),
+            "カウント": int(len(series)),
+            "最大": float(series.max()),
+            "最小": float(series.min()),
+            "平均": float(series.mean()),
+            "中央値": float(series.median()),
+            "1/4分位": float(series.quantile(0.25)),
+            "3/4分位": float(series.quantile(0.75))
+        }
+        
+        if len(series) > 1:
+            stats["標準偏差"] = float(series.std())
+            stats["分散"] = float(series.var())
+        else:
+            stats["標準偏差"] = 0.0
+            stats["分散"] = 0.0
+        
+        return stats
+    
+    # 統計情報表示
+    st.subheader(f"📈 スタジオ統計（{len(studio_counts):,}社）")
+    
+    # 基礎統計表
+    st.markdown("### 📊 スタジオの回数（作品数）の基礎統計")
+    count_stats = calculate_basic_stats(studio_counts['作品数'])
+    if count_stats:
+        count_df = pd.DataFrame(
+            [(key, value) for key, value in count_stats.items()],
+            columns=["統計項目", "作品数"]
+        )
+        st.dataframe(count_df, use_container_width=True, height=400)
+    else:
+        st.warning("作品数のデータがありません")
 
 
 def show_scatter_tab(data, genre):
@@ -1759,9 +3306,14 @@ def show_scatter_tab(data, genre):
             extended_data = pd.read_sql_query(query, conn)
             conn.close()
         else:
+            db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\manga_data.db')
             extended_data = data.copy()
     except Exception as e:
         st.error(f"データ取得エラー: {e}")
+        if genre == "アニメ":
+            db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\anime_data.db')
+        else:
+            db_path = Path(r'C:\Users\PC_User\Desktop\GitHub\public_anilist_data_rank_and_analysis\db\manga_data.db')
         extended_data = data.copy()
     
     # 選択肢の定義
@@ -1797,8 +3349,8 @@ def show_scatter_tab(data, genre):
         if genre == "アニメ" and 'seasonYear' in extended_data.columns:
             years = ["全て"] + [str(int(year)) for year in get_unique_values(extended_data, 'seasonYear')]
             selected_year = st.selectbox("年度", years, key="corr_year")
-        elif genre == "漫画" and 'startYear' in extended_data.columns:
-            years = ["全て"] + [str(int(year)) for year in get_unique_values(extended_data, 'startYear')]
+        elif genre == "漫画" and 'seasonYear' in extended_data.columns:
+            years = ["全て"] + [str(int(year)) for year in get_unique_values(extended_data, 'seasonYear')]
             selected_year = st.selectbox("年度", years, key="corr_year")
         else:
             selected_year = "全て"
@@ -1856,7 +3408,7 @@ def show_scatter_tab(data, genre):
     elif genre == "漫画":
         if selected_year != "全て":
             try:
-                filters['startYear'] = float(selected_year)
+                filters['seasonYear'] = float(selected_year)
             except ValueError:
                 pass
     
@@ -2161,24 +3713,31 @@ def main():
     # サイドバーメニュー
     st.sidebar.title("📋 メニュー")
     
-    # アニメ関連セクション
-    st.sidebar.markdown("## 🎬 アニメ関連")
-    anime_menu = st.sidebar.radio(
-        "分析項目を選択:",
-        ["タイトル", "キャラ", "声優", "スタッフ", "スタジオ", "原作", "ジャンル", "エピソード数"],
-        key="anime_menu"
-    )
+    # 統合メニュー（アニメとマンガを1つのラジオボタンに）
+    menu_options = [
+        "🎬 アニメ - タイトル",
+        "🎬 アニメ - キャラ",
+        "🎬 アニメ - 声優",
+        "🎬 アニメ - スタッフ",
+        "🎬 アニメ - スタジオ",
+        "🎬 アニメ - 原作",
+        "🎬 アニメ - ジャンル",
+        "🎬 アニメ - エピソード数",
+        "📚 マンガ - タイトル",
+        "📚 マンガ - キャラ",
+        "📚 マンガ - スタッフ",
+        "📚 マンガ - ジャンル",
+        "📚 マンガ - エピソード数"
+    ]
     
-    # マンガ関連セクション  
-    st.sidebar.markdown("## 📚 マンガ関連")
-    manga_menu = st.sidebar.radio(
+    selected_menu = st.sidebar.radio(
         "分析項目を選択:",
-        ["タイトル", "キャラ", "スタッフ", "ジャンル", "エピソード数"],
-        key="manga_menu"
+        menu_options,
+        key="main_menu"
     )
     
     # 選択されたメニューに応じて処理を分岐
-    if anime_menu == "タイトル":
+    if selected_menu == "🎬 アニメ - タイトル":
         # 既存のアニメタイトル分析（ランキング、基礎統計、相関分析）
         data = load_anime_data()
         if data is None:
@@ -2195,7 +3754,7 @@ def main():
         with tab2:
             show_scatter_tab(data, "アニメ")
     
-    elif anime_menu == "キャラ":
+    elif selected_menu == "🎬 アニメ - キャラ":
         # キャラクター分析
         data = load_character_data()
         if data is None:
@@ -2206,7 +3765,7 @@ def main():
         # 基礎統計のみ表示
         show_character_statistics_tab(data)
     
-    elif anime_menu == "声優":
+    elif selected_menu == "🎬 アニメ - 声優":
         # 声優分析
         data = load_voiceactor_data()
         if data is None:
@@ -2217,7 +3776,7 @@ def main():
         # 基礎統計のみ表示
         show_voiceactor_statistics_tab(data)
     
-    elif anime_menu == "スタッフ":
+    elif selected_menu == "🎬 アニメ - スタッフ":
         # スタッフ分析
         data = load_staff_data()
         if data is None:
@@ -2228,18 +3787,40 @@ def main():
         # 基礎統計のみ表示
         show_staff_statistics_tab(data)
     
-    elif anime_menu == "スタジオ":
+    elif selected_menu == "🎬 アニメ - スタジオ":
         # スタジオ分析
-        data = load_studios_data()
+        data = load_studio_data()
         if data is None:
             st.error("スタジオデータを読み込めませんでした。")
             st.info("データベースファイルが存在することを確認してください。")
             return
         
         # 基礎統計のみ表示
-        show_studios_statistics_tab(data)
+        show_studio_statistics_tab(data)
     
-    elif manga_menu == "タイトル":
+    elif selected_menu == "🎬 アニメ - ジャンル":
+        # ジャンル分析
+        data = load_genre_data()
+        if data is None:
+            st.error("ジャンルデータを読み込めませんでした。")
+            st.info("データベースファイルが存在することを確認してください。")
+            return
+        
+        # 基礎統計のみ表示
+        show_genre_statistics_tab(data)
+    
+    elif selected_menu == "🎬 アニメ - 原作":
+        # 原作分析
+        data = load_source_data()
+        if data is None:
+            st.error("原作データを読み込めませんでした。")
+            st.info("データベースファイルが存在することを確認してください。")
+            return
+        
+        # 基礎統計のみ表示
+        show_source_statistics_tab(data)
+    
+    elif selected_menu == "📚 マンガ - タイトル":
         # マンガタイトル分析
         data = load_manga_data()
         if data is None:
@@ -2256,15 +3837,49 @@ def main():
         with tab2:
             show_scatter_tab(data, "漫画")
     
+    elif selected_menu == "📚 マンガ - キャラ":
+        # マンガキャラクター分析
+        data = load_manga_character_data()
+        if data is None:
+            st.error("マンガキャラクターデータを読み込めませんでした。")
+            st.info("データベースファイルが存在することを確認してください。")
+            return
+        
+        # 基礎統計のみ表示
+        show_manga_character_statistics_tab(data)
+    
+    elif selected_menu == "📚 マンガ - スタッフ":
+        # マンガスタッフ分析
+        data = load_manga_staff_data()
+        if data is None:
+            st.error("マンガスタッフデータを読み込めませんでした。")
+            st.info("データベースファイルが存在することを確認してください。")
+            return
+        
+        # 基礎統計のみ表示
+        show_manga_staff_statistics_tab(data)
+    
+    elif selected_menu == "📚 マンガ - ジャンル":
+        # マンガジャンル分析
+        data = load_manga_genre_data()
+        if data is None:
+            st.error("マンガジャンルデータを読み込めませんでした。")
+            st.info("データベースファイルが存在することを確認してください。")
+            return
+        
+        # 基礎統計のみ表示
+        show_manga_genre_statistics_tab(data)
+    
     else:
         # その他のメニュー項目（今後実装予定）
-        if anime_menu in ["声優", "スタッフ", "スタジオ", "原作", "ジャンル", "エピソード数"]:
-            st.header(f"🎬 アニメ {anime_menu} 分析")
-            st.info(f"アニメの{anime_menu}分析機能は今後実装予定です。")
-            
-        elif manga_menu in ["キャラ", "スタッフ", "ジャンル", "エピソード数"]:
-            st.header(f"📚 マンガ {manga_menu} 分析")
-            st.info(f"マンガの{manga_menu}分析機能は今後実装予定です。")
+        menu_parts = selected_menu.split(" - ")
+        if len(menu_parts) == 2:
+            category = menu_parts[0]  # "🎬 アニメ" or "📚 マンガ"
+            item = menu_parts[1]  # "原作", "ジャンル", etc.
+            st.header(f"{category} {item} 分析")
+            st.info(f"{category}の{item}分析機能は今後実装予定です。")
+        else:
+            st.info("選択された機能は今後実装予定です。")
 
 if __name__ == "__main__":
     main()
